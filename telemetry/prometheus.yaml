@@ -1,0 +1,37 @@
+# Prometheus 3.15 for InfraScope.
+# Application metrics arrive by OTLP push (--web.enable-otlp-receiver); the
+# platform's own components are scraped. See ADR-0003.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+storage:
+  tsdb:
+    # Pushed OTLP samples can arrive slightly out of order.
+    out_of_order_time_window: 30m
+    # Retention lives here; the --storage.tsdb.retention.* flags are deprecated.
+    retention:
+      time: 7d
+      size: 2GB
+
+otlp:
+  # Becomes the `service_name` label used by every overview query. Only
+  # allow-listed attributes are promoted, to keep label cardinality bounded.
+  promote_resource_attributes:
+    - service.name
+    - deployment.environment.name
+  translation_strategy: UnderscoreEscapingWithSuffixes
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  - job_name: clickhouse
+    static_configs:
+      - targets: ["clickhouse:9363"]

@@ -1,0 +1,89 @@
+# OpenTelemetry Collector (contrib 0.164.0) for InfraScope.
+#
+# Write path: OTLP in -> memory_limiter -> resource -> exporter sending queues
+#   traces, logs -> ClickHouse (exporter-managed schema, ADR-0004)
+#   metrics      -> Prometheus native OTLP endpoint (ADR-0003)
+#
+# Batching happens inside each exporter's sending queue (`sending_queue.batch`),
+# as the ClickHouse exporter documentation recommends, rather than with the
+# standalone batch processor: batches then share the queue that retries them.
+# Credentials and the TTL come from the container environment.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Must run first. Beyond the limit, receivers return retryable errors so
+  # SDKs back off instead of the collector running out of memory.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  resource:
+    attributes:
+      - key: deployment.environment.name
+        value: ${env:INFRASCOPE_ENVIRONMENT:-local}
+        action: insert
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    username: ${env:CLICKHOUSE_USER}
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: true
+    ttl: ${env:TELEMETRY_TTL:-72h}
+    timeout: 10s
+    sending_queue:
+      queue_size: 1000
+      batch:
+        flush_timeout: 5s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  otlp_http/prometheus:
+    # "/v1/metrics" is appended, giving Prometheus's /api/v1/otlp/v1/metrics.
+    endpoint: http://prometheus:9090/api/v1/otlp
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 300s
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [clickhouse]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [clickhouse]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [otlp_http/prometheus]

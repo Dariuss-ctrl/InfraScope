@@ -1,0 +1,8 @@
+# Normalise line endings. Shell scripts and configs are mounted into Linux
+# containers, where CRLF line endings break them.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

@@ -1,0 +1,3 @@
+module infrascope/demo-service
+
+go 1.27.0
