@@ -121,8 +121,13 @@ services:
     environment:
       DEMO_HTTP_ADDR: ":8082"
       DEMO_DATABASE_URL: postgres://shop:${SHOP_DB_PASSWORD}@postgres:5432/shop?sslmode=disable
+      DEMO_SLOW_QUERY_THRESHOLD: 100ms
+      DEMO_SEED_PRODUCTS: ${DEMO_SEED_PRODUCTS:-10000}
+      DEMO_SEED_CUSTOMERS: ${DEMO_SEED_CUSTOMERS:-100000}
+      DEMO_SEED_ORDERS: ${DEMO_SEED_ORDERS:-1000000}
       OTEL_SERVICE_NAME: demo-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
       OTEL_METRIC_EXPORT_INTERVAL: "15000"
     ports:
       - "${INFRASCOPE_BIND:-127.0.0.1}:${DEMO_SERVICE_PORT:-8082}:8082"
@@ -131,6 +136,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      # The server starts listening only after the first-start seed, which
+      # inserts about a million rows with the default sizes.
+      start_period: 300s
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,6 +169,10 @@ services:
       TARGET_URL: http://demo-service:8082
       RATE: ${RATE:-20}
       DURATION: ${DURATION:-2m}
+      # The workload picks existing products, customers and orders.
+      SEED_PRODUCTS: ${DEMO_SEED_PRODUCTS:-10000}
+      SEED_CUSTOMERS: ${DEMO_SEED_CUSTOMERS:-100000}
+      SEED_ORDERS: ${DEMO_SEED_ORDERS:-1000000}
     volumes:
       - ../tests/load:/scripts:ro
     depends_on:

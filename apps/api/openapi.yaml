@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: InfraScope API
   version: 0.1.0
+  license:
+    name: MIT
+    identifier: MIT
   description: |
     Query and configuration API for InfraScope (docs/SPEC.md, section 8).
 

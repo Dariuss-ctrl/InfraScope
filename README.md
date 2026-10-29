@@ -4,7 +4,7 @@
 
 InfraScope collects traces, metrics and logs with OpenTelemetry, stores them in ClickHouse and Prometheus, and puts one investigation workflow on top: service health → the trace of a bad request → the logs written during it → the operation that caused it. Signals are linked by trace ID rather than by matching timestamps, so each step is one click.
 
-> **Status: Phase 0 — specification and runnable skeleton.** The full stack starts, health-checks itself and passes a smoke test; the product features are built in Phases 1–5 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
+> **Status: Phase 1 — instrumented demo service and telemetry pipeline.** The stack starts and health-checks itself, and an automated [pipeline test](tests/pipeline/README.md) proves that one request to the demo service becomes a trace (HTTP and database spans), correlated logs and request metrics. The query API and investigation UI come in Phases 2–3 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
 
 ## The problem
 
@@ -17,7 +17,7 @@ Dashboards tell you *that* p95 latency doubled. Finding out *why* usually means 
 3. The service overview shows p95 latency rising while traffic stays flat.
 4. Click the spike → the slowest traces from that window → one `SELECT` span dominates the waterfall.
 5. "Logs for this trace" shows the slow-query warning written during that span.
-6. Add the index (a migration) and rerun the identical workload.
+6. Add the index (`make demo-fix`) and rerun the identical workload.
 7. Compare the before and after measurements in a benchmark report.
 
 Full script with commands: [docs/demo-script.md](docs/demo-script.md).
@@ -59,7 +59,7 @@ docker compose --env-file .env -f deployments/docker-compose.yml up -d --build -
 bash scripts/smoke.sh
 ```
 
-Then open <http://localhost:8080>. The status badge in the header shows the API's live view of its dependencies. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
+Then open <http://localhost:8080>. The status badge in the header shows the API's live view of its dependencies. To watch the telemetry pipeline work end to end, run `make up-debug && make test-pipeline`. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
 
 ## Tech stack
 
@@ -78,7 +78,7 @@ Then open <http://localhost:8080>. The status badge in the header shows the API'
 ## Project status
 
 - [x] **Phase 0:** specification, decision records, runnable skeleton, CI
-- [ ] **Phase 1:** instrumented demo service and telemetry pipeline
+- [x] **Phase 1:** instrumented demo service and telemetry pipeline
 - [ ] **Phase 2:** query API (services, traces, logs, auth)
 - [ ] **Phase 3:** investigation UI (overview, waterfall, logs, correlation)
 - [ ] **Phase 4:** alerting, failure scenarios, reliability hardening
@@ -115,3 +115,7 @@ docs/             spec, architecture, ADRs, runbook, benchmarks
 - [Runbook](docs/runbook.md)
 - [Demo walkthrough](docs/demo-script.md)
 - [Benchmark method](docs/benchmarks/README.md)
+
+## License
+
+[MIT](LICENSE) © 2026 Kipyegon Darius

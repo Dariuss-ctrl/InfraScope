@@ -1,0 +1,10 @@
+# golangci-lint v2 configuration, shared by every Go module in the repository.
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  exclusions:
+    # Unchecked errors from Close, Flush, fmt.Print* and similar are idiomatic.
+    presets:
+      - std-error-handling

@@ -1,8 +1,6 @@
-// Command demo-service is the toy shop that InfraScope observes.
-//
-// Phase 0 serves only health and service information. Phase 1 adds the shop
-// endpoints, seed data, OpenTelemetry instrumentation and fault injection
-// described in docs/SPEC.md, section 9.
+// Command demo-service is the toy shop that InfraScope observes: an
+// OpenTelemetry-instrumented HTTP API over PostgreSQL that can reproduce the
+// failure scenarios in docs/SPEC.md, section 9.
 //
 // Usage:
 //
@@ -12,7 +10,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,33 +19,81 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"infrascope/demo-service/internal/config"
+	"infrascope/demo-service/internal/shop"
+	"infrascope/demo-service/internal/telemetry"
 )
 
-const defaultHTTPAddr = ":8082"
+const serviceVersion = "0.2.0"
 
 func main() {
-	addr := os.Getenv("DEMO_HTTP_ADDR")
-	if addr == "" {
-		addr = defaultHTTPAddr
-	}
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		addr := os.Getenv("DEMO_HTTP_ADDR")
+		if addr == "" {
+			addr = config.DefaultHTTPAddr
+		}
 		os.Exit(healthcheck(addr))
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(addr, logger); err != nil {
-		logger.Error("server stopped", "error", err)
+	if err := run(); err != nil {
+		slog.Error("demo-service stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr string, logger *slog.Logger) error {
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	shutdownTelemetry, err := telemetry.Setup(ctx, "demo-service", serviceVersion)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// ctx is already cancelled at this point; flush with a fresh deadline.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(flushCtx); err != nil {
+			slog.Error("flushing telemetry", "error", err)
+		}
+	}()
+
+	logger := telemetry.Logger("infrascope/demo-service")
+	slog.SetDefault(logger)
+
+	pool, err := shop.Connect(ctx, cfg.DatabaseURL, cfg.SlowQueryThreshold, logger)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	store := shop.NewStore(pool)
+	if err := store.Migrate(ctx); err != nil {
+		return err
+	}
+	seedStart := time.Now()
+	seeded, err := store.Seed(ctx, shop.SeedSize{
+		Products:  cfg.SeedProducts,
+		Customers: cfg.SeedCustomers,
+		Orders:    cfg.SeedOrders,
+	})
+	if err != nil {
+		return err
+	}
+	if seeded {
+		logger.Info("seeded demo data",
+			"products", cfg.SeedProducts, "orders", cfg.SeedOrders, "duration", time.Since(seedStart))
+	}
+
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           newRouter(),
+		Addr:              cfg.HTTPAddr,
+		Handler:           shop.Instrument(shop.NewHandler(store, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -58,7 +103,7 @@ func run(addr string, logger *slog.Logger) error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", addr)
+		logger.Info("listening", "addr", cfg.HTTPAddr)
 		serveErr <- srv.ListenAndServe()
 	}()
 
@@ -78,26 +123,6 @@ func run(addr string, logger *slog.Logger) error {
 		return err
 	}
 	return nil
-}
-
-func newRouter() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"service": "demo-service",
-			"message": "Shop endpoints arrive in Phase 1; see docs/SPEC.md, section 9.",
-		})
-	})
-	return mux
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // healthcheck probes the server's own liveness endpoint and returns an exit

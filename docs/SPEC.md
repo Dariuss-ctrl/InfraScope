@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.1 · Phase 0 (specification and skeleton) |
+| **Status** | Draft v0.2 · Phase 1 (instrumented demo service and telemetry pipeline) |
 | **Last updated** | 2026-10-29 |
 | **Related** | [Architecture](architecture.md) · [Decision records](decisions/README.md) · [Runbook](runbook.md) · [Demo walkthrough](demo-script.md) · [Benchmark method](benchmarks/README.md) · [API contract](../apps/api/openapi.yaml) |
 
@@ -82,7 +82,7 @@ The OpenTelemetry Collector receives OTLP over gRPC (`4317`) and HTTP (`4318`) f
 - **AC-1.1** One request to the demo service produces a trace with an HTTP server span and at least one database client span, linked by parent/child IDs.
 - **AC-1.2** Log records written while handling that request carry the trace's `TraceId` and the active `SpanId`.
 - **AC-1.3** The request is reflected in `http_server_request_duration_seconds_*` series in Prometheus, labelled with `service_name`.
-- **AC-1.4** The pipeline test (§11) finds the trace, the logs and the metric through the InfraScope API within its polling timeout of 60 s. That number is a test timeout, not a latency claim. Actual ingest-to-query lag is measured under NFR-2.
+- **AC-1.4** The pipeline test ([§11](#11-testing-strategy), [`tests/pipeline`](../tests/pipeline/README.md)) finds the trace, the logs and the metric, each within a polling timeout of 60 s. That number is a test timeout, not a latency claim; actual ingest-to-query lag is measured under NFR-2. In Phase 1 the test queries ClickHouse and Prometheus directly. From Phase 2 it goes through the InfraScope API.
 - **AC-1.5** The collector's own metrics (accepted, refused, sent and failed items, queue size) are scraped by Prometheus.
 
 ### FR-2 Service overview · Phase 2 (API), Phase 3 (UI)
@@ -284,7 +284,13 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 
 ## 9. Demo service and fault scenarios
 
-`demo-service` is a small Go shop API backed by its own `shop` database. It is instrumented with OpenTelemetry: `otelhttp` for HTTP, `otelpgx` for PostgreSQL, the `otelslog` bridge for logs, and Go runtime metrics. Seed data is generated deterministically on first start: about 10k products and about 1M orders, both configurable.
+`demo-service` is a small Go shop API backed by its own `shop` database. It is instrumented with OpenTelemetry: `otelhttp` for HTTP (server spans named after the matched route, such as `GET /orders/{id}`), `otelpgx` for PostgreSQL, the `otelslog` bridge for logs, and Go runtime metrics. Seed data is generated deterministically on first start: 10k products, 100k customers and 1M orders by default, all configurable.
+
+Three details make the signals link up:
+
+- Every response carries an `X-Trace-Id` header, so a caller (or a test) can find its own trace.
+- Every request writes an access-log record in its trace context.
+- Statements slower than `DEMO_SLOW_QUERY_THRESHOLD` (100 ms) are logged at WARN in the context of their database span, so a slow span and its log line point at each other.
 
 | Endpoint | Purpose |
 |---|---|
@@ -292,11 +298,11 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 | `GET /orders?customer_email=` | customer order history, which is the S1 query |
 | `POST /orders` | the write path. It calls `inventory` from Phase 4. |
 | `GET /orders/{id}` | point lookup |
-| `POST /admin/faults` | toggles runtime faults (published on localhost only) |
+| `POST /admin/faults` *(Phase 4)* | toggles the runtime faults for S2 and S3 |
 
 | ID | Scenario | Mechanism | What the investigation should reveal | Phase |
 |---|---|---|---|---|
-| **S1** | **Missing index** | `orders.customer_email` ships without an index, so the history query does a sequential scan over about 1M rows. The fix is a migration that adds the index. `make demo-reset` drops it again. | p95 rises for the `/orders` route → slow traces are dominated by one `SELECT` span → that span's `db.query.text` shows the predicate → after the fix, the same workload is re-measured. | 1 |
+| **S1** | **Missing index** | `orders.customer_email` ships without an index, so the history query does a sequential scan over about 1M rows. The fix, `make demo-fix`, adds the index with `CREATE INDEX CONCURRENTLY`, which is safe under load. `make demo-reset` drops it again. | p95 rises for the `/orders` route → slow traces are dominated by one `SELECT` span → that span's `db.query.text` shows the predicate → after the fix, the same workload is re-measured. | 1 |
 | **S2** | **Error burst** | `POST /admin/faults {"error_rate": 0.2}` makes 20% of `POST /orders` fail with a logged ERROR that includes the exception. | The error-rate alert fires → error traces → the exception event and the matching ERROR log share a trace ID. | 4 |
 | **S3** | **Slow dependency** | A second service, `inventory`, gets injected latency beyond `demo-service`'s client timeout. | The trace crosses two services through W3C `traceparent` propagation, and the timeout appears as an error span on the client side. | 4 |
 

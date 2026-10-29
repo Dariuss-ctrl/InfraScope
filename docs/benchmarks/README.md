@@ -12,7 +12,7 @@ InfraScope makes **no performance claims without a report.** This page defines h
 
 ## Reference workload
 
-Driven by `tests/load/workload.js` (k6, `constant-arrival-rate` executor). In Phase 0 the script exercises `/healthz` only, so the harness itself can be verified. The shop request mix arrives with the demo service in Phase 1:
+Driven by [`tests/load/workload.js`](../../tests/load/workload.js) (k6, `constant-arrival-rate` executor). Products, customers and orders are drawn from the ranges the deterministic seed creates, so every lookup hits existing data:
 
 | Request | Share | Notes |
 |---|---|---|

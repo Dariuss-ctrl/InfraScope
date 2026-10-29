@@ -17,7 +17,9 @@ Operational procedures for a single-node InfraScope deployment. Run every comman
 | Container status and health | `make ps` | `$COMPOSE ps` |
 | Follow logs (all, or one service) | `make logs` / `make logs S=otel-collector` | `$COMPOSE logs -f --tail=200 otel-collector` |
 | Smoke test | `make smoke` | `bash scripts/smoke.sh` |
-| Generate load | `make load RATE=20 DURATION=2m` | `$COMPOSE --profile load run --rm -e RATE=20 -e DURATION=2m k6` |
+| Generate load against the running stack | `make load RATE=20 DURATION=2m` | `$COMPOSE --profile load run --rm --no-deps -e RATE=20 -e DURATION=2m k6` |
+| End-to-end telemetry test (needs `up-debug`) | `make test-pipeline` | see [tests/pipeline](../tests/pipeline/README.md) |
+| Scenario S1: drop / restore the index | `make demo-reset` / `make demo-fix` | `$COMPOSE exec -T postgres psql -U postgres -d shop -c "DROP INDEX CONCURRENTLY IF EXISTS orders_customer_email_idx"` |
 | Stop, keep data | `make down` | `$COMPOSE down` |
 | Stop and **delete all data** | `make reset` | `$COMPOSE down -v --remove-orphans` |
 
@@ -48,6 +50,14 @@ Query these in Prometheus (debug mode). A `*` stands for the signal type (`spans
 | `count by (service_name) (target_info)` | one series per reporting service | a service is not pushing metrics → check its OTLP endpoint |
 
 ## Incidents
+
+### demo-service is unhealthy right after the first start
+
+On its first start, demo-service creates and seeds the `shop` database (1M orders by default) *before* it starts listening, so its healthcheck fails until seeding finishes. The healthcheck allows a 300 s start period for this.
+
+1. `make logs S=demo-service`. A `seeded demo data` record followed by `listening` means it recovered by itself. `make ps` then shows it healthy.
+2. If `make up` gave up first, run it again. It is idempotent.
+3. On Docker Desktop the VM's clock can jump forward (for example after the host sleeps), which uses up the start period early. If this keeps happening, lower `DEMO_SEED_ORDERS` in `.env` and run `make reset && make up`. A smaller table makes scenario S1's slowdown less pronounced.
 
 ### ClickHouse is down or unhealthy
 

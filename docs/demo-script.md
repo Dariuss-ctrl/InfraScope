@@ -2,14 +2,14 @@
 
 A ten-minute demonstration of the workflow InfraScope exists for: **from a latency symptom to a verified fix, using only telemetry.** It follows scenario **S1, *missing index*** ([SPEC §9](SPEC.md#9-demo-service-and-fault-scenarios)).
 
-> **Status:** this script describes the experience at the end of **Phase 3**. Steps marked *(Phase N)* depend on work that has not been built yet. Until then, `make up` and `make smoke` work, and everything else is the plan.
+> **Status:** this script describes the experience at the end of **Phase 3**. Steps marked *(Phase N)* depend on work that has not been built yet. Today, every command-line step works: traffic, the S1 index toggle, and confirming the slow query with `EXPLAIN`. The UI steps are the plan.
 
 ## Setup
 
 ```bash
 cp .env.example .env          # then change every password in it
 make up && make smoke         # stack is up and healthy
-make demo-fix                 # (Phase 1) start from the healthy state: index present
+make demo-fix                 # start from the healthy state: index present
 ```
 
 Open <http://localhost:8080> and sign in with `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env` *(Phase 3)*.
@@ -31,7 +31,7 @@ make load RATE=20 DURATION=10m
 While the load is running:
 
 ```bash
-make demo-reset               # (Phase 1) drops orders_customer_email_idx: the "bad deploy"
+make demo-reset               # drops orders_customer_email_idx: the "bad deploy"
 ```
 
 **Show:** within a few scrape intervals, p95 latency for `demo-service` climbs while its request rate stays flat. Something got slower without failing.
@@ -46,7 +46,7 @@ Click the latency spike on the overview chart. The trace explorer opens filtered
 
 From the trace view, open **Logs for this trace**.
 
-**Show:** the request's log lines, including the demo service's slow-query warning (statements over 100 ms are logged at WARN, with the trace context attached) *(Phase 1)*. Click a log line's trace link to return to the same trace.
+**Show:** the request's log lines, including the demo service's slow-query warning (statements over 100 ms are logged at WARN, with the trace context attached). Click a log line's trace link to return to the same trace.
 
 **Point out:** no timestamps were matched by hand. Logs and spans share `TraceId`, and the lookup is bounded by the trace's own time range (SPEC [§7.1](SPEC.md#71-clickhouse-telemetry-store)).
 
@@ -65,7 +65,7 @@ docker compose --env-file .env -f deployments/docker-compose.yml exec postgres \
 ## 6. Fix and re-run the same workload
 
 ```bash
-make demo-fix                 # (Phase 1) applies the migration that creates the index
+make demo-fix                 # creates the index (CREATE INDEX CONCURRENTLY, safe under load)
 make load RATE=20 DURATION=10m
 ```
 
