@@ -78,10 +78,10 @@ test: ## Unit tests for Go and the dashboard
 	@for m in $(GO_MODULES); do echo "== $$m"; (cd $$m && go test ./...) || exit 1; done
 	cd $(DASHBOARD) && npm test
 
-test-integration: ## Integration tests (testcontainers-go, from Phase 2)
-	@echo "Integration tests arrive in Phase 2; see tests/integration/README.md"
+test-integration: ## API tests against disposable PostgreSQL, ClickHouse and Prometheus containers
+	cd apps/api && go test -tags integration -count=1 -p 1 ./...
 
-test-pipeline: .env ## End-to-end telemetry test; needs a stack started with make up-debug
+test-pipeline: .env ## End-to-end telemetry test through the API; needs a running stack (make up)
 	set -a && . ./.env && set +a && cd tests/pipeline && INFRASCOPE_PIPELINE=1 go test -count=1 -v ./...
 
 fmt: ## Format Go code

@@ -16,6 +16,11 @@ info:
     - Lists use `limit` (default 50, max 500) and an opaque `cursor`; responses
       carry `next_cursor` while more results exist.
     - Errors use one envelope: `{"error": {"code", "message", "fields"}}`.
+      Validation errors list every invalid parameter in `fields`; unknown and
+      repeated query parameters are rejected.
+    - Every route except health, status and login needs the session cookie.
+      A PostgreSQL outage is reported as `503 database_unavailable`, never as
+      `401`, so it does not log anyone out.
 
     Every operation carries `x-phase`, the roadmap phase that implements it.
     Until then the server answers `501 not_implemented`.
@@ -111,7 +116,9 @@ paths:
               schema: { type: string }
         "400": { $ref: "#/components/responses/InvalidArgument" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/DatabaseUnavailable" }
 
   /api/v1/auth/logout:
     post:
@@ -122,6 +129,23 @@ paths:
       responses:
         "204": { description: Session deleted and cookie cleared. }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DatabaseUnavailable" }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: The logged-in user and when the session expires.
+      operationId: getCurrentUser
+      x-phase: 2
+      responses:
+        "200":
+          description: The current session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentUser" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/DatabaseUnavailable" }
 
   /api/v1/services:
     get:
@@ -147,6 +171,7 @@ paths:
         "400": { $ref: "#/components/responses/InvalidArgument" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "503": { $ref: "#/components/responses/MetricsUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
 
   /api/v1/services/{service}/metrics:
     get:
@@ -164,7 +189,7 @@ paths:
           schema: { type: integer, minimum: 5, maximum: 3600 }
       responses:
         "200":
-          description: Series aligned to the step.
+          description: Series aligned to the step. Steps without data have `v` null.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ServiceMetrics" }
@@ -172,6 +197,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/MetricsUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
 
   /api/v1/traces:
     get:
@@ -193,6 +219,7 @@ paths:
           schema: { type: integer, minimum: 0 }
         - name: status
           in: query
+          description: Status of the root span, which records whether the request as a whole failed.
           schema: { type: string, enum: [any, ok, error], default: any }
         - name: sort
           in: query
@@ -203,13 +230,14 @@ paths:
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Matching traces, newest or slowest first.
+          description: Traces whose root span matches, newest or slowest first.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TraceSearchResult" }
         "400": { $ref: "#/components/responses/InvalidArgument" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "503": { $ref: "#/components/responses/StorageUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
 
   /api/v1/traces/{traceId}:
     get:
@@ -229,6 +257,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/StorageUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
 
   /api/v1/logs:
     get:
@@ -244,7 +273,9 @@ paths:
           schema: { type: string, enum: [trace, debug, info, warn, error, fatal] }
         - name: q
           in: query
-          description: Case-insensitive token match on the log body.
+          description: >-
+            Words that must all appear in the body, matched case-insensitively.
+            Letters and digits form words; anything else separates them. At most 8 words.
           schema: { type: string, maxLength: 200 }
         - name: trace_id
           in: query
@@ -258,13 +289,14 @@ paths:
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Matching records, newest first.
+          description: Matching records, newest first. A trace with no logs gives an empty list.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogSearchResult" }
         "400": { $ref: "#/components/responses/InvalidArgument" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "503": { $ref: "#/components/responses/StorageUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
 
   /api/v1/alert-rules:
     get:
@@ -273,6 +305,7 @@ paths:
       operationId: listAlertRules
       x-phase: 4
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
           description: All rules, ordered by name.
           content:
@@ -296,6 +329,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/AlertRuleInput" }
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "201":
           description: Created.
           content:
@@ -313,6 +347,7 @@ paths:
       operationId: getAlertRule
       x-phase: 4
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
           description: The rule.
           content:
@@ -331,6 +366,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/AlertRuleInput" }
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
           description: Updated.
           content:
@@ -345,6 +381,7 @@ paths:
       operationId: deleteAlertRule
       x-phase: 4
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "204": { description: Deleted. }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -365,6 +402,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
+        "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
           description: Alerts, newest first.
           content:
@@ -451,13 +489,39 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: A state-changing request came from another origin (`forbidden`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     StorageUnavailable:
-      description: ClickHouse is unreachable or timed out (`storage_unavailable`).
+      description: >-
+        ClickHouse is unreachable (`storage_unavailable`), or PostgreSQL is
+        unreachable while the session is checked (`database_unavailable`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     MetricsUnavailable:
-      description: Prometheus is unreachable or timed out (`metrics_unavailable`).
+      description: >-
+        Prometheus is unreachable (`metrics_unavailable`), or PostgreSQL is
+        unreachable while the session is checked (`database_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    DatabaseUnavailable:
+      description: PostgreSQL is unreachable (`database_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    QueryTimeout:
+      description: >-
+        The query exceeded its time limit (`query_timeout`). Narrow the time
+        range or add filters.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotImplemented:
+      description: Defined in the contract but not built yet (`not_implemented`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -476,11 +540,14 @@ components:
               enum:
                 - invalid_argument
                 - unauthenticated
+                - forbidden
                 - not_found
                 - rate_limited
                 - not_implemented
                 - storage_unavailable
                 - metrics_unavailable
+                - database_unavailable
+                - query_timeout
                 - internal
             message: { type: string }
             fields:
@@ -516,9 +583,17 @@ components:
     LoginRequest:
       type: object
       required: [username, password]
+      additionalProperties: false
       properties:
-        username: { type: string, maxLength: 128 }
-        password: { type: string, maxLength: 256, format: password }
+        username: { type: string, minLength: 1, maxLength: 128 }
+        password: { type: string, minLength: 1, maxLength: 72, format: password, description: At most 72 bytes (bcrypt's limit). }
+
+    CurrentUser:
+      type: object
+      required: [username, expires_at]
+      properties:
+        username: { type: string }
+        expires_at: { type: string, format: date-time }
 
     TraceId:
       type: string
@@ -590,14 +665,18 @@ components:
 
     Trace:
       type: object
-      required: [trace_id, start_time, end_time, spans]
+      required: [trace_id, start_time, end_time, spans, truncated]
       properties:
         trace_id: { $ref: "#/components/schemas/TraceId" }
         start_time: { type: string, format: date-time }
         end_time: { type: string, format: date-time }
         spans:
           type: array
+          description: Earliest first.
           items: { $ref: "#/components/schemas/Span" }
+        truncated:
+          type: boolean
+          description: The trace has more spans than one response carries (10,000); only the earliest are included.
 
     Span:
       type: object

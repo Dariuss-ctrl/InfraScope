@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,16 +15,38 @@ import (
 // DefaultHTTPAddr is the listen address used when INFRASCOPE_HTTP_ADDR is unset.
 const DefaultHTTPAddr = ":8081"
 
+// Admin password length limits: at least 12 characters, and at most 72
+// bytes, bcrypt's input limit.
+const (
+	minAdminPassword = 12
+	maxAdminPassword = 72
+)
+
 // Config holds every setting the API reads at startup.
 type Config struct {
 	HTTPAddr           string
 	DatabaseURL        string
 	ClickHouseURL      string
+	ClickHouseUser     string
+	ClickHousePassword string
 	PrometheusURL      string
 	CollectorHealthURL string
-	// DependencyTimeout bounds every call to a dependency, so a slow backend
-	// produces a fast error instead of a hung request (NFR-1).
+
+	AdminUser     string
+	AdminPassword string
+	// SessionTTL is how long a login lasts.
+	SessionTTL time.Duration
+	// CookieSecure marks the session cookie Secure; enable it whenever the
+	// dashboard is served over HTTPS.
+	CookieSecure bool
+
+	// DependencyTimeout bounds health probes and connection attempts, so a
+	// down dependency produces a fast error instead of a hung request (NFR-1).
 	DependencyTimeout time.Duration
+	// QueryTimeout is the longest a single search may run (NFR-2 guard rail).
+	QueryTimeout time.Duration
+	// MaxSearchRange is the widest time window a trace or log search may cover.
+	MaxSearchRange time.Duration
 }
 
 // Load reads the configuration from the process environment. Defaults match
@@ -33,27 +56,67 @@ func Load() (Config, error) {
 }
 
 func load(getenv func(string) string) (Config, error) {
+	env := func(key, fallback string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		return fallback
+	}
 	cfg := Config{
-		HTTPAddr:           valueOr(getenv("INFRASCOPE_HTTP_ADDR"), DefaultHTTPAddr),
+		HTTPAddr:           env("INFRASCOPE_HTTP_ADDR", DefaultHTTPAddr),
 		DatabaseURL:        getenv("INFRASCOPE_DATABASE_URL"),
-		ClickHouseURL:      baseURL(valueOr(getenv("INFRASCOPE_CLICKHOUSE_URL"), "http://clickhouse:8123")),
-		PrometheusURL:      baseURL(valueOr(getenv("INFRASCOPE_PROMETHEUS_URL"), "http://prometheus:9090")),
-		CollectorHealthURL: baseURL(valueOr(getenv("INFRASCOPE_COLLECTOR_HEALTH_URL"), "http://otel-collector:13133")),
-		DependencyTimeout:  2 * time.Second,
+		ClickHouseURL:      baseURL(env("INFRASCOPE_CLICKHOUSE_URL", "http://clickhouse:8123")),
+		ClickHouseUser:     env("INFRASCOPE_CLICKHOUSE_USER", "default"),
+		ClickHousePassword: getenv("INFRASCOPE_CLICKHOUSE_PASSWORD"),
+		PrometheusURL:      baseURL(env("INFRASCOPE_PROMETHEUS_URL", "http://prometheus:9090")),
+		CollectorHealthURL: baseURL(env("INFRASCOPE_COLLECTOR_HEALTH_URL", "http://otel-collector:13133")),
+		AdminUser:          env("INFRASCOPE_ADMIN_USER", "admin"),
+		AdminPassword:      getenv("INFRASCOPE_ADMIN_PASSWORD"),
 	}
 
-	if raw := getenv("INFRASCOPE_DEPENDENCY_TIMEOUT"); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil || d <= 0 {
-			return Config{}, fmt.Errorf("INFRASCOPE_DEPENDENCY_TIMEOUT: want a positive duration such as 2s, got %q", raw)
+	var errs []error
+	durationVar := func(dst *time.Duration, key string, fallback, lo, hi time.Duration) {
+		*dst = fallback
+		raw := getenv(key)
+		if raw == "" {
+			return
 		}
-		cfg.DependencyTimeout = d
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < lo || d > hi {
+			errs = append(errs, fmt.Errorf("%s: want a duration from %s to %s, got %q", key, lo, hi, raw))
+			return
+		}
+		*dst = d
+	}
+	durationVar(&cfg.DependencyTimeout, "INFRASCOPE_DEPENDENCY_TIMEOUT", 2*time.Second, time.Millisecond, time.Minute)
+	durationVar(&cfg.QueryTimeout, "INFRASCOPE_QUERY_TIMEOUT", 10*time.Second, time.Millisecond, 5*time.Minute)
+	durationVar(&cfg.SessionTTL, "INFRASCOPE_SESSION_TTL", 12*time.Hour, 5*time.Minute, 30*24*time.Hour)
+	durationVar(&cfg.MaxSearchRange, "INFRASCOPE_MAX_SEARCH_RANGE", 24*time.Hour, time.Minute, 7*24*time.Hour)
+
+	if raw := getenv("INFRASCOPE_COOKIE_SECURE"); raw != "" {
+		secure, err := strconv.ParseBool(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("INFRASCOPE_COOKIE_SECURE: want true or false, got %q", raw))
+		}
+		cfg.CookieSecure = secure
 	}
 
 	if cfg.DatabaseURL == "" {
-		return Config{}, errors.New("INFRASCOPE_DATABASE_URL is required")
+		errs = append(errs, errors.New("INFRASCOPE_DATABASE_URL is required"))
+	} else if _, err := cfg.DatabaseAddr(); err != nil {
+		errs = append(errs, err)
 	}
-	if _, err := cfg.DatabaseAddr(); err != nil {
+	switch n := len(cfg.AdminPassword); {
+	case n == 0:
+		errs = append(errs, errors.New("INFRASCOPE_ADMIN_PASSWORD is required"))
+	case n < minAdminPassword || n > maxAdminPassword:
+		errs = append(errs, fmt.Errorf("INFRASCOPE_ADMIN_PASSWORD must be %d to %d characters", minAdminPassword, maxAdminPassword))
+	}
+	if strings.TrimSpace(cfg.AdminUser) == "" || len(cfg.AdminUser) > 128 {
+		errs = append(errs, errors.New("INFRASCOPE_ADMIN_USER must be 1 to 128 characters"))
+	}
+
+	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -71,13 +134,6 @@ func (c Config) DatabaseAddr() (string, error) {
 		port = "5432"
 	}
 	return net.JoinHostPort(u.Hostname(), port), nil
-}
-
-func valueOr(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
 }
 
 func baseURL(raw string) string {

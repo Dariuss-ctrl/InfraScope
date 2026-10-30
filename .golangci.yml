@@ -1,6 +1,11 @@
 # golangci-lint v2 configuration, shared by every Go module in the repository.
 version: "2"
 
+run:
+  # Lint the integration tests too.
+  build-tags:
+    - integration
+
 linters:
   # errcheck, govet, ineffassign, staticcheck, unused.
   default: standard

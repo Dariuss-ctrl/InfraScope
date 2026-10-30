@@ -12,7 +12,7 @@ NFR-3 requires that the dashboard and API are not open to anyone who can reach t
 - One administrator account. Its username and password come from `.env` and are written to the `users` table at startup (bcrypt hash; existing sessions are revoked if the password changes).
 - **Server-side sessions:** login issues a random 256-bit token. Only its hash is stored in `sessions`, with an expiry. Logout deletes the row.
 - The token travels in an `HttpOnly`, `SameSite=Strict` cookie, marked `Secure` when served over TLS. Nothing sensitive is kept in browser storage.
-- Login is rate-limited per client IP. Mutating endpoints require JSON bodies and a matching `Origin` header (CSRF defence in depth).
+- Login is rate-limited per client IP. Mutating endpoints require JSON bodies and reject a request whose `Origin` header names a different origin (CSRF defence in depth). Requests without `Origin` come from non-browser clients and are allowed.
 - Unauthenticated routes: `/healthz`, `/readyz`, `/api/v1/status` and `/api/v1/auth/login`.
 
 ## Consequences

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -112,22 +111,5 @@ func TestHTTPProbe(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestTCPProbe(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-
-	if err := TCPProbe(addr)(context.Background()); err != nil {
-		t.Errorf("probe of a listening port: %v", err)
-	}
-
-	ln.Close()
-	if err := TCPProbe(addr)(context.Background()); err == nil {
-		t.Error("probe of a closed port succeeded, want an error")
 	}
 }

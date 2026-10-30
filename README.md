@@ -4,7 +4,7 @@
 
 InfraScope collects traces, metrics and logs with OpenTelemetry, stores them in ClickHouse and Prometheus, and puts one investigation workflow on top: service health → the trace of a bad request → the logs written during it → the operation that caused it. Signals are linked by trace ID rather than by matching timestamps, so each step is one click.
 
-> **Status: Phase 1 — instrumented demo service and telemetry pipeline.** The stack starts and health-checks itself, and an automated [pipeline test](tests/pipeline/README.md) proves that one request to the demo service becomes a trace (HTTP and database spans), correlated logs and request metrics. The query API and investigation UI come in Phases 2–3 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
+> **Status: Phase 2 — query API.** A secured, tested API serves service metrics, trace search and detail, and log search from real telemetry. An automated [pipeline test](tests/pipeline/README.md) follows one request through the API, from trace to logs to metrics, and [integration tests](tests/integration/README.md) run against real databases. The investigation UI comes in Phase 3 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
 
 ## The problem
 
@@ -59,7 +59,16 @@ docker compose --env-file .env -f deployments/docker-compose.yml up -d --build -
 bash scripts/smoke.sh
 ```
 
-Then open <http://localhost:8080>. The status badge in the header shows the API's live view of its dependencies. To watch the telemetry pipeline work end to end, run `make up-debug && make test-pipeline`. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
+Then open <http://localhost:8080>. The status badge in the header shows the API's live view of its dependencies. To watch the telemetry pipeline work end to end, run `make test-pipeline`. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
+
+Try the API directly. The account is `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env`:
+
+```bash
+curl -c session.txt -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<from .env>"}' http://localhost:8080/api/v1/auth/login
+curl -b session.txt http://localhost:8080/api/v1/services
+curl -b session.txt 'http://localhost:8080/api/v1/traces?service=demo-service&sort=duration&limit=5'
+```
 
 ## Tech stack
 
@@ -79,7 +88,7 @@ Then open <http://localhost:8080>. The status badge in the header shows the API'
 
 - [x] **Phase 0:** specification, decision records, runnable skeleton, CI
 - [x] **Phase 1:** instrumented demo service and telemetry pipeline
-- [ ] **Phase 2:** query API (services, traces, logs, auth)
+- [x] **Phase 2:** query API (services, traces, logs, auth)
 - [ ] **Phase 3:** investigation UI (overview, waterfall, logs, correlation)
 - [ ] **Phase 4:** alerting, failure scenarios, reliability hardening
 - [ ] **Phase 5:** benchmarked v1.0 release

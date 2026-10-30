@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.2 · Phase 1 (instrumented demo service and telemetry pipeline) |
-| **Last updated** | 2026-10-29 |
+| **Status** | Draft v0.3 · Phase 2 (query API) |
+| **Last updated** | 2026-10-30 |
 | **Related** | [Architecture](architecture.md) · [Decision records](decisions/README.md) · [Runbook](runbook.md) · [Demo walkthrough](demo-script.md) · [Benchmark method](benchmarks/README.md) · [API contract](../apps/api/openapi.yaml) |
 
 ---
@@ -95,7 +95,7 @@ The overview lists every service that reported data in the selected time range w
 
 ### FR-3 Trace explorer · Phase 2 (API), Phase 3 (UI)
 
-**Search:** filters for service, operation (span name), minimum and maximum duration, status (`error` | `ok` | any) and time range. Results can be sorted by start time or by duration and are paginated with an opaque cursor. Each result shows the trace ID, root operation, root service, start time, duration, span count and an error flag.
+**Search:** filters for service, operation (span name), minimum and maximum duration, status (`error` | `ok` | any) and time range. The filters apply to each trace's root span, which represents the request as a whole. Results can be sorted by start time or by duration and are paginated with an opaque cursor. Each result shows the trace ID, root operation, root service, start time, duration, span count and an error flag.
 
 **Detail:** the full span tree drawn as a waterfall. For each span it shows service, name, kind, start offset, duration, status, attributes and events (including recorded exceptions). Database spans show the statement from `db.query.text`. Values are bound as parameters, so they are not part of the statement text.
 
@@ -198,7 +198,7 @@ Engine layout: `PARTITION BY toDate(Timestamp)`, `ORDER BY (ServiceName, SpanNam
 
 **`otel_traces_trace_id_ts`**, which a materialised view keeps up to date with `(TraceId, Start, End)` for every trace and is ordered by `TraceId`. A trace lookup reads this small table first and then queries `otel_traces` with `TraceId = ? AND Timestamp BETWEEN Start AND End`. That prunes partitions instead of scanning the whole retention window (AC-3.4).
 
-**`otel_logs`**: one row per log record. It has `Timestamp`, `TraceId`, `SpanId`, `SeverityText`, `SeverityNumber`, `ServiceName`, `Body`, `LogAttributes` and `ResourceAttributes`. It is ordered by `(toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp)`, with a bloom-filter index on `TraceId` and a token index on `lower(Body)`.
+**`otel_logs`**: one row per log record. It has `Timestamp`, `TraceId`, `SpanId`, `SeverityText`, `SeverityNumber`, `ServiceName`, `Body`, `LogAttributes` and `ResourceAttributes`. It is ordered by `(toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp)`, with skip indexes on `TraceId` and on `lower(Body)`. The exporter builds these as full-text `text` indexes on ClickHouse versions that support them (26.8 does) and as bloom filters otherwise. The exact DDL for the pinned versions is committed in `apps/api/internal/clickhouse/testdata/schema/`, and the schema-drift test compares against it.
 
 **Query patterns → physical design**
 
@@ -230,12 +230,12 @@ The exact series and label names are confirmed against real data in Phase 1, and
 
 ### 7.3 PostgreSQL configuration store
 
-The `infrascope` database is managed by versioned migrations in `apps/api/migrations/` from Phase 2. The `shop` database belongs to the demo service and is never read by InfraScope.
+The `infrascope` database is managed by versioned migrations in `apps/api/internal/postgres/migrations/` (Phase 2). They are embedded in the API binary and applied at startup under a PostgreSQL advisory lock, so instances starting together cannot race. The `shop` database belongs to the demo service and is never read by InfraScope.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `users` | `id`, `username` (unique), `password_hash`, `created_at` | The admin is created or updated from `.env` at startup. |
-| `sessions` | `token_hash` (PK), `user_id`, `created_at`, `expires_at` | Server-side sessions make logout and revocation real. |
+| `users` *(Phase 2)* | `id`, `username` (unique), `password_hash`, `created_at`, `updated_at` | The admin is created or updated from `.env` at startup. |
+| `sessions` *(Phase 2)* | `token_hash` (PK, SHA-256 of the token), `user_id`, `created_at`, `expires_at` | Server-side sessions make logout and revocation real. |
 | `alert_rules` | `id`, `name` (unique), `service`, `signal`, `comparator`, `threshold`, `window_seconds`, `for_seconds`, `enabled`, `created_at`, `updated_at` | `CHECK` constraints mirror API validation. |
 | `alert_rule_state` | `rule_id` (PK), `state`, `since`, `last_value`, `last_evaluated_at` | Lets the evaluator resume after a restart. |
 | `alert_events` | `id`, `rule_id`, `state`, `value`, `observed_at` | History; index on `(rule_id, observed_at DESC)`. |
@@ -255,13 +255,16 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `invalid_argument` | 400 | validation failed (`fields` lists each problem) |
-| `unauthenticated` | 401 | no or expired session |
-| `not_found` | 404 | unknown trace, rule, … |
+| `invalid_argument` | 400 | validation failed (`fields` lists each problem; unknown or repeated parameters are rejected) |
+| `unauthenticated` | 401 | no, invalid or expired session |
+| `forbidden` | 403 | a state-changing request from another origin |
+| `not_found` | 404 | unknown trace, service, … |
 | `rate_limited` | 429 | too many login attempts |
 | `not_implemented` | 501 | endpoint defined in the contract but not built yet |
-| `storage_unavailable` | 503 | ClickHouse unreachable or timed out |
-| `metrics_unavailable` | 503 | Prometheus unreachable or timed out |
+| `storage_unavailable` | 503 | ClickHouse unreachable |
+| `metrics_unavailable` | 503 | Prometheus unreachable |
+| `database_unavailable` | 503 | PostgreSQL unreachable. A session that cannot be checked is a 503, never a 401, so an outage logs nobody out. |
+| `query_timeout` | 504 | the query exceeded its time limit (`INFRASCOPE_QUERY_TIMEOUT`, default 10 s) |
 | `internal` | 500 | unexpected failure (details are logged, never returned) |
 
 **Endpoints**
@@ -271,12 +274,13 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 | `GET /healthz` | — | none (liveness) | 0 ✅ |
 | `GET /readyz` | — | all dependencies (readiness) | 0 ✅ |
 | `GET /api/v1/status` | — | all dependencies (dashboard banner) | 0 ✅ |
-| `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` | —, session | PostgreSQL | 2 |
-| `GET /api/v1/services` | session | Prometheus | 2 |
-| `GET /api/v1/services/{service}/metrics` | session | Prometheus | 2 |
-| `GET /api/v1/traces` | session | ClickHouse | 2 |
-| `GET /api/v1/traces/{traceId}` | session | ClickHouse | 2 |
-| `GET /api/v1/logs` | session | ClickHouse | 2 |
+| `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` | —, session | PostgreSQL | 2 ✅ |
+| `GET /api/v1/auth/me` | session | PostgreSQL | 2 ✅ |
+| `GET /api/v1/services` | session | Prometheus | 2 ✅ |
+| `GET /api/v1/services/{service}/metrics` | session | Prometheus | 2 ✅ |
+| `GET /api/v1/traces` | session | ClickHouse | 2 ✅ |
+| `GET /api/v1/traces/{traceId}` | session | ClickHouse | 2 ✅ |
+| `GET /api/v1/logs` | session | ClickHouse | 2 ✅ |
 | `GET, POST /api/v1/alert-rules` · `GET, PUT, DELETE /api/v1/alert-rules/{id}` | session | PostgreSQL | 4 |
 | `GET /api/v1/alerts` | session | PostgreSQL | 4 |
 
@@ -318,7 +322,7 @@ The load generator is `tests/load/workload.js` (k6). The request mix and arrival
 | Credential leakage | Secrets live only in `.env` (git-ignored; `.env.example` holds placeholders) and in server-side environment variables. Collector config reads credentials through `${env:…}`. The browser receives a session cookie and never a database credential. |
 | Injection through search filters | Every ClickHouse and PostgreSQL query uses bound parameters. Sort fields and filter operators are taken from allow-lists, never from interpolated user strings. PromQL label values are escaped by a single helper that has unit tests. |
 | **Untrusted telemetry content** (XSS, misleading output) | Span attributes and log bodies are attacker-controllable input. React escapes rendered text, and the UI never renders telemetry as HTML (`dangerouslySetInnerHTML` is banned by lint). Long values are truncated in tables. nginx sends a restrictive Content-Security-Policy. |
-| Cross-site request forgery | `SameSite=Strict` session cookie. Mutating endpoints require `Content-Type: application/json` and a matching `Origin`. |
+| Cross-site request forgery | `SameSite=Strict` session cookie. A state-changing request whose `Origin` names a different origin is rejected with `403 forbidden`; requests without `Origin` come from non-browser clients, which hold no victim's cookie. Request bodies must be `application/json`, which a cross-site HTML form cannot send. |
 | Password guessing | bcrypt hashing and per-IP rate limiting on login. |
 | Untrusted telemetry senders | The OTLP ports bind to localhost by default. Exposing them on a network requires turning on the collector's `bearertokenauth` extension (documented in the runbook). |
 | Resource exhaustion through queries | The guard rails in NFR-2: maximum range, maximum page size, query timeouts, and per-dependency client timeouts. |

@@ -106,6 +106,16 @@ On its first start, demo-service creates and seeds the `shop` database (1M order
 4. **Emergency:** drop whole days at once (partitions are daily): `ALTER TABLE otel.otel_logs DROP PARTITION '2026-10-27';`
 5. **Prometheus:** lower `storage.tsdb.retention.time` or `.size` in `telemetry/prometheus.yaml`, then `$COMPOSE restart prometheus`.
 
+### Logging in fails
+
+- **`401 Invalid username or password`:** the account is `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env`, created when the API starts. To reset the password, change it in `.env` and run `$COMPOSE up -d api`. On startup the API replaces the hash and revokes every existing session (`admin account ready … outcome=password_changed` in `make logs S=api`).
+- **`429 Too many login attempts`:** each client gets 5 attempts, then one more every 12 seconds. Wait for the `Retry-After` header's number of seconds.
+- **`403 forbidden`:** a state-changing request carried an `Origin` from another site or port. Use the dashboard's own address, or a non-browser client, which sends no `Origin`.
+
+### The API answers 503 or 504
+
+The error code names the dependency: `storage_unavailable` (ClickHouse), `metrics_unavailable` (Prometheus), `database_unavailable` (PostgreSQL, which also blocks every session check). Check `curl -s http://localhost:8080/api/v1/status` and the matching section of this runbook. `504 query_timeout` means a query ran past `INFRASCOPE_QUERY_TIMEOUT` (10 s); narrow the time range or add filters. If timeouts persist, check `clickhouse_schema` in the status report, because a missing skip index makes searches slower.
+
 ### The dashboard loads but `/api` returns 502
 
 The API is down or restarting. Check `make logs S=api` and `make ps`. nginx re-resolves the API's address through Docker DNS on every request, so it recovers on its own once the API is back. No nginx restart is needed.

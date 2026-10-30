@@ -1,36 +1,42 @@
 # api
 
-InfraScope's query and configuration API: Go standard library `net/http`, JSON over HTTP. The contract is **[openapi.yaml](openapi.yaml)**. Requirements and phases are in [SPEC §8](../../docs/SPEC.md#8-api-surface).
+InfraScope's query and configuration API: Go standard library `net/http`, JSON over HTTP. The contract is **[openapi.yaml](openapi.yaml)**, and the integration tests validate every response against it. Requirements and phases are in [SPEC §8](../../docs/SPEC.md#8-api-surface).
 
-## What exists today (Phase 0)
+## Endpoints
 
-- `GET /healthz`: liveness. Checks no dependencies, so a database outage never restarts the API.
-- `GET /readyz`: readiness. Returns `503` only when a **required** dependency (PostgreSQL) is down.
-- `GET /api/v1/status`: the same report, always `200`, for the dashboard banner.
-- Every other `/api/` route answers `501 not_implemented` in the standard error envelope.
-- `api healthcheck`: probes `/healthz` from inside the distroless container.
+| Route | Auth | Reads |
+|---|---|---|
+| `GET /healthz`, `GET /readyz`, `GET /api/v1/status` | — | dependency probes |
+| `POST /api/v1/auth/login` · `POST /api/v1/auth/logout` · `GET /api/v1/auth/me` | —, session, session | PostgreSQL |
+| `GET /api/v1/services` · `GET /api/v1/services/{service}/metrics` | session | Prometheus |
+| `GET /api/v1/traces` · `GET /api/v1/traces/{traceId}` | session | ClickHouse |
+| `GET /api/v1/logs` | session | ClickHouse |
+| `/api/v1/alert-rules`, `/api/v1/alerts` | session | `501` until Phase 4 |
 
-Dependencies are probed concurrently, each bounded by `INFRASCOPE_DEPENDENCY_TIMEOUT`. The bound holds even for a probe that ignores its context. Reports never include error details, because they are served unauthenticated; those go to the structured log.
+## How it is built
+
+- **Nothing user-supplied becomes query text.** ClickHouse queries bind every value as a typed server-side parameter (`{service:String}`), and SQL is assembled only from constants. PromQL label values are Go-quoted, which is exactly how PromQL parses strings. Each ClickHouse query also runs with `readonly=2` and a server-side `max_execution_time`.
+- **Failures are typed.** Each client wraps errors as `backend.ErrUnavailable`, `ErrTimeout` or `ErrNotFound`, which the HTTP layer maps to `503 storage_unavailable` / `metrics_unavailable` / `database_unavailable`, `504 query_timeout` and `404`. Unexpected errors are logged and returned as a generic `500`.
+- **Degraded, not down.** The API starts and serves with ClickHouse or Prometheus unreachable; only the features that need them fail. `/api/v1/status` also reports `clickhouse_schema`, which goes down when a table or skip index the queries rely on is missing.
+- **Keyset pagination.** Cursors encode `(sort value, tie-breaker)`, so rows sharing a timestamp or duration never skip or repeat across pages. Pages hold at most 500 results, and a trace response at most 10,000 spans (`truncated: true` beyond that).
+- **Sessions (ADR-0006).** bcrypt password hashes. Random 256-bit tokens stored only as SHA-256 hashes. An `HttpOnly`, `SameSite=Strict` cookie. A same-origin check on state-changing requests. Per-client login rate limiting (5 attempts, then one more every 12 s).
+- **Self-observability.** The API exports its own traces, metrics and logs as `infrascope-api`. Its outgoing ClickHouse and Prometheus calls appear as client spans.
 
 ## Layout
 
 ```
-cmd/api/            entry point: config, wiring, graceful shutdown, healthcheck subcommand
-internal/config/    environment configuration and validation
-internal/health/    dependency probes and readiness aggregation
-internal/httpapi/   routes and the JSON/error-envelope conventions
+cmd/api/              wiring, graceful shutdown, healthcheck subcommand
+internal/config/      environment configuration and validation
+internal/backend/     the failure kinds every client returns
+internal/postgres/    users, sessions, embedded migrations (advisory-locked)
+internal/auth/        login, sessions, bootstrap of the admin account, rate limiter
+internal/clickhouse/  trace and log search, trace detail, schema check, cursors
+internal/prometheus/  service summaries and series (PromQL builders)
+internal/httpapi/     routes, parameter validation, error envelope
+internal/health/      dependency probes and readiness
+internal/otelsetup/   OpenTelemetry SDK setup for the API itself
+internal/testenv/     disposable containers for integration tests (build tag "integration")
 ```
-
-Planned packages:
-
-| Package | Phase | Responsibility |
-|---|---|---|
-| `internal/auth` | 2 | login, sessions, rate limiting, CSRF checks |
-| `internal/store` | 2 | PostgreSQL access (`users`, `sessions`, alert rules and state) |
-| `internal/telemetry` | 2 | ClickHouse trace and log queries (parameterised builders, cursors) |
-| `internal/metrics` | 2 | Prometheus queries (PromQL builders, label escaping) |
-| `internal/alerting` | 4 | evaluator loop and the pure state-transition function |
-| `migrations/` | 2 | versioned PostgreSQL schema for the `infrascope` database |
 
 ## Configuration
 
@@ -38,15 +44,21 @@ Planned packages:
 |---|---|---|
 | `INFRASCOPE_HTTP_ADDR` | `:8081` | listen address |
 | `INFRASCOPE_DATABASE_URL` | — (required) | `postgres://infrascope:…@postgres:5432/infrascope` |
-| `INFRASCOPE_CLICKHOUSE_URL` | `http://clickhouse:8123` | ClickHouse HTTP interface |
-| `INFRASCOPE_PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus HTTP API |
+| `INFRASCOPE_CLICKHOUSE_URL` / `_USER` / `_PASSWORD` | `http://clickhouse:8123` / `default` / — | telemetry store |
+| `INFRASCOPE_PROMETHEUS_URL` | `http://prometheus:9090` | metrics store |
 | `INFRASCOPE_COLLECTOR_HEALTH_URL` | `http://otel-collector:13133` | collector `health_check` extension |
-| `INFRASCOPE_DEPENDENCY_TIMEOUT` | `2s` | upper bound for any dependency call |
-| `INFRASCOPE_ADMIN_USER`, `INFRASCOPE_ADMIN_PASSWORD` | — | admin bootstrap (Phase 2) |
+| `INFRASCOPE_ADMIN_USER` / `_PASSWORD` | `admin` / — (required, 12–72 characters) | the single account; changing the password revokes its sessions |
+| `INFRASCOPE_SESSION_TTL` | `12h` | session lifetime |
+| `INFRASCOPE_COOKIE_SECURE` | `false` | set `true` behind HTTPS |
+| `INFRASCOPE_DEPENDENCY_TIMEOUT` | `2s` | health probes and connection attempts |
+| `INFRASCOPE_QUERY_TIMEOUT` | `10s` | longest a single query may run |
+| `INFRASCOPE_MAX_SEARCH_RANGE` | `24h` | widest trace or log search window |
 
-## Development
+## Tests
 
 ```bash
-go test ./...
-INFRASCOPE_DATABASE_URL=postgres://u:p@localhost:5432/infrascope go run ./cmd/api
+go test ./...                                     # unit tests, no Docker needed
+go test -tags integration -count=1 -p 1 ./...     # real PostgreSQL, ClickHouse and Prometheus containers
 ```
+
+The integration suites are described in [tests/integration](../../tests/integration/README.md).

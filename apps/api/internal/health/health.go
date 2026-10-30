@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -154,19 +153,5 @@ func HTTPProbe(client *http.Client, url string) Probe {
 			return fmt.Errorf("unexpected status %d", resp.StatusCode)
 		}
 		return nil
-	}
-}
-
-// TCPProbe returns a probe that opens and closes a TCP connection to addr.
-// It stands in for a PostgreSQL ping until the API gains a database driver
-// in Phase 2.
-func TCPProbe(addr string) Probe {
-	return func(ctx context.Context) error {
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return err
-		}
-		return conn.Close()
 	}
 }

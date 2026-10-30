@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,80 +19,122 @@ import (
 // timeout (AC-1.4), not a latency claim: measured lag lives in benchmark reports.
 const budget = 60 * time.Second
 
-// TestRequestIsObservable is the Phase 1 exit criterion (docs/SPEC.md, FR-1):
-// one request to the demo service becomes a trace with an HTTP server span and
-// a database span, log records that carry the same trace ID, and request
-// metrics in Prometheus.
+// TestRequestIsObservable is the end-to-end check of FR-1, made through the
+// InfraScope API exactly as the dashboard would (SPEC AC-1.4): one request to
+// the demo service becomes a trace with an HTTP server span and a database
+// span, log records that carry the same trace ID, and request metrics for
+// the service.
 func TestRequestIsObservable(t *testing.T) {
 	s := stackFromEnv(t)
+	s.login(t)
+	sent := time.Now().UTC()
 	traceID := s.createOrder(t)
 	t.Logf("created an order in trace %s", traceID)
 
 	eventually(t, "trace with an HTTP server span and a database span", func() error {
-		rows, err := s.clickhouse(`
-			SELECT SpanName,
-			       ParentSpanId = '' AS is_root,
-			       mapContains(SpanAttributes, 'db.system.name') AS is_db
-			FROM otel.otel_traces
-			WHERE TraceId = {trace_id:String} AND ServiceName = 'demo-service'`, traceID)
-		if err != nil {
+		var trace struct {
+			Spans []struct {
+				Name         string            `json:"name"`
+				ParentSpanID *string           `json:"parent_span_id"`
+				Attributes   map[string]string `json:"attributes"`
+			} `json:"spans"`
+		}
+		if err := s.get("/api/v1/traces/"+traceID, &trace); err != nil {
 			return err
 		}
 		var root, db bool
-		for _, r := range rows {
-			root = root || (r[0] == "POST /orders" && r[1] == "1")
-			db = db || r[2] == "1"
+		for _, span := range trace.Spans {
+			root = root || (span.Name == "POST /orders" && span.ParentSpanID == nil)
+			db = db || span.Attributes["db.system.name"] != ""
 		}
 		if !root || !db {
-			return fmt.Errorf("want a root span %q and a database span; have %v", "POST /orders", rows)
+			return fmt.Errorf("want a root span %q and a database span; have %+v", "POST /orders", trace.Spans)
 		}
 		return nil
 	})
 
 	eventually(t, "log records carrying the trace ID", func() error {
-		rows, err := s.clickhouse(`SELECT count() FROM otel.otel_logs WHERE TraceId = {trace_id:String}`, traceID)
-		if err != nil {
+		var page struct {
+			Logs []struct {
+				Body    string  `json:"body"`
+				TraceID *string `json:"trace_id"`
+			} `json:"logs"`
+		}
+		q := url.Values{
+			"trace_id": {traceID},
+			"from":     {sent.Add(-time.Minute).Format(time.RFC3339)},
+			"to":       {time.Now().UTC().Format(time.RFC3339)},
+		}
+		if err := s.get("/api/v1/logs?"+q.Encode(), &page); err != nil {
 			return err
 		}
-		if len(rows) != 1 || rows[0][0] == "0" {
+		if len(page.Logs) == 0 {
 			return errors.New("no log records with this trace ID yet")
+		}
+		for _, l := range page.Logs {
+			if l.TraceID == nil || *l.TraceID != traceID {
+				return fmt.Errorf("record %q is not linked to the trace", l.Body)
+			}
 		}
 		return nil
 	})
 
-	eventually(t, "request-duration metrics for the route", func() error {
-		count, err := s.prometheusValue(`sum(http_server_request_duration_seconds_count{` +
-			`service_name="demo-service", http_route="/orders", http_request_method="POST"})`)
-		if err != nil {
+	eventually(t, "request metrics for the service", func() error {
+		var list struct {
+			Services []struct {
+				Name        string   `json:"name"`
+				RequestRate *float64 `json:"request_rate"`
+			} `json:"services"`
+		}
+		if err := s.get("/api/v1/services", &list); err != nil {
 			return err
 		}
-		if count < 1 {
-			return fmt.Errorf("request count is %v", count)
+		for _, svc := range list.Services {
+			if svc.Name == "demo-service" && svc.RequestRate != nil && *svc.RequestRate > 0 {
+				return nil
+			}
 		}
-		return nil
+		return fmt.Errorf("demo-service has no request rate yet: %+v", list.Services)
 	})
 }
 
-// stack describes a running deployment with internal ports published
-// (make up-debug). `make test-pipeline` fills the environment from .env.
+// stack is a running deployment, reached the way a browser reaches it:
+// through the dashboard's nginx.
 type stack struct {
-	demoURL, clickhouseURL, prometheusURL string
-	clickhouseUser, clickhousePassword    string
-	client                                *http.Client
+	apiURL, demoURL string
+	user, password  string
+	client          *http.Client
 }
 
 func stackFromEnv(t *testing.T) stack {
 	t.Helper()
 	if os.Getenv("INFRASCOPE_PIPELINE") == "" {
-		t.Skip("needs a running stack: make up-debug, then make test-pipeline")
+		t.Skip("needs a running stack: make up, then make test-pipeline")
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return stack{
-		demoURL:            envOr("DEMO_URL", "http://localhost:"+envOr("DEMO_SERVICE_PORT", "8082")),
-		clickhouseURL:      envOr("CLICKHOUSE_URL", "http://localhost:8123"),
-		prometheusURL:      envOr("PROMETHEUS_URL", "http://localhost:9090"),
-		clickhouseUser:     envOr("CLICKHOUSE_USER", "infrascope"),
-		clickhousePassword: os.Getenv("CLICKHOUSE_PASSWORD"),
-		client:             &http.Client{Timeout: 10 * time.Second},
+		apiURL:   envOr("DASHBOARD_URL", "http://localhost:"+envOr("DASHBOARD_PORT", "8080")),
+		demoURL:  envOr("DEMO_URL", "http://localhost:"+envOr("DEMO_SERVICE_PORT", "8082")),
+		user:     envOr("INFRASCOPE_ADMIN_USER", "admin"),
+		password: os.Getenv("INFRASCOPE_ADMIN_PASSWORD"),
+		client:   &http.Client{Timeout: 15 * time.Second, Jar: jar},
+	}
+}
+
+func (s stack) login(t *testing.T) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"username": s.user, "password": s.password})
+	resp, err := s.client.Post(s.apiURL+"/api/v1/auth/login", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("login = %d: %s (are INFRASCOPE_ADMIN_USER/PASSWORD from .env exported?)", resp.StatusCode, b)
 	}
 }
 
@@ -119,67 +161,22 @@ func (s stack) createOrder(t *testing.T) string {
 	return traceID
 }
 
-// clickhouse runs a read-only query over ClickHouse's HTTP interface, with
-// traceID bound to {trace_id:String}, and returns the tab-separated rows.
-func (s stack) clickhouse(query, traceID string) ([][]string, error) {
-	params := url.Values{
-		"query":          {query + "\nFORMAT TabSeparated"},
-		"param_trace_id": {traceID},
-	}
-	req, err := http.NewRequest(http.MethodGet, s.clickhouseURL+"/?"+params.Encode(), nil)
+// get calls the InfraScope API and decodes a 200 response into out. A 404 is
+// "not there yet" for the polling loop; other statuses are reported as is.
+func (s stack) get(path string, out any) error {
+	resp, err := s.client.Get(s.apiURL + path)
 	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth(s.clickhouseUser, s.clickhousePassword)
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	body, _ := io.ReadAll(resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return json.Unmarshal(body, out)
+	case http.StatusNotFound:
+		return errors.New("not ingested yet")
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("clickhouse answered %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var rows [][]string
-	for line := range strings.Lines(string(body)) {
-		if line = strings.TrimRight(line, "\n"); line != "" {
-			rows = append(rows, strings.Split(line, "\t"))
-		}
-	}
-	return rows, nil
-}
-
-// prometheusValue runs an instant query that returns one series and parses
-// its value.
-func (s stack) prometheusValue(query string) (float64, error) {
-	resp, err := s.client.Get(s.prometheusURL + "/api/v1/query?" + url.Values{"query": {query}}.Encode())
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	var out struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-		Data   struct {
-			Result []struct {
-				Value [2]any `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return 0, fmt.Errorf("decode prometheus response: %w", err)
-	}
-	if out.Status != "success" {
-		return 0, fmt.Errorf("prometheus: %s", out.Error)
-	}
-	if len(out.Data.Result) == 0 {
-		return 0, errors.New("no matching series yet")
-	}
-	raw, _ := out.Data.Result[0].Value[1].(string)
-	return strconv.ParseFloat(raw, 64)
+	return fmt.Errorf("GET %s = %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // eventually retries check until it succeeds or the budget runs out.

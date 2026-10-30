@@ -6,58 +6,99 @@ import (
 	"time"
 )
 
-func env(vars map[string]string) func(string) string {
+// valid is the minimal environment that loads.
+func valid(overrides map[string]string) func(string) string {
+	vars := map[string]string{
+		"INFRASCOPE_DATABASE_URL":   "postgres://infrascope:secret@postgres:5432/infrascope?sslmode=disable",
+		"INFRASCOPE_ADMIN_PASSWORD": "a-long-enough-password",
+	}
+	for k, v := range overrides {
+		vars[k] = v
+	}
 	return func(key string) string { return vars[key] }
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
-	cfg, err := load(env(map[string]string{
-		"INFRASCOPE_DATABASE_URL": "postgres://infrascope:secret@postgres:5432/infrascope?sslmode=disable",
-	}))
+	cfg, err := load(valid(nil))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.HTTPAddr != DefaultHTTPAddr {
-		t.Errorf("HTTPAddr = %q, want %q", cfg.HTTPAddr, DefaultHTTPAddr)
+	checks := []struct {
+		name      string
+		got, want any
+	}{
+		{"HTTPAddr", cfg.HTTPAddr, DefaultHTTPAddr},
+		{"ClickHouseURL", cfg.ClickHouseURL, "http://clickhouse:8123"},
+		{"ClickHouseUser", cfg.ClickHouseUser, "default"},
+		{"AdminUser", cfg.AdminUser, "admin"},
+		{"DependencyTimeout", cfg.DependencyTimeout, 2 * time.Second},
+		{"QueryTimeout", cfg.QueryTimeout, 10 * time.Second},
+		{"SessionTTL", cfg.SessionTTL, 12 * time.Hour},
+		{"MaxSearchRange", cfg.MaxSearchRange, 24 * time.Hour},
+		{"CookieSecure", cfg.CookieSecure, false},
 	}
-	if cfg.ClickHouseURL != "http://clickhouse:8123" {
-		t.Errorf("ClickHouseURL = %q", cfg.ClickHouseURL)
-	}
-	if cfg.DependencyTimeout != 2*time.Second {
-		t.Errorf("DependencyTimeout = %v, want 2s", cfg.DependencyTimeout)
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
 	}
 }
 
-func TestLoadTrimsTrailingSlashes(t *testing.T) {
-	cfg, err := load(env(map[string]string{
-		"INFRASCOPE_DATABASE_URL":   "postgres://u:p@db/x",
-		"INFRASCOPE_PROMETHEUS_URL": "http://prom:9090/",
+func TestLoadReadsOverrides(t *testing.T) {
+	cfg, err := load(valid(map[string]string{
+		"INFRASCOPE_PROMETHEUS_URL":   "http://prom:9090/",
+		"INFRASCOPE_QUERY_TIMEOUT":    "3s",
+		"INFRASCOPE_SESSION_TTL":      "1h",
+		"INFRASCOPE_COOKIE_SECURE":    "true",
+		"INFRASCOPE_MAX_SEARCH_RANGE": "6h",
 	}))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if cfg.PrometheusURL != "http://prom:9090" {
-		t.Errorf("PrometheusURL = %q, want no trailing slash", cfg.PrometheusURL)
+		t.Errorf("PrometheusURL = %q, want the trailing slash trimmed", cfg.PrometheusURL)
+	}
+	if cfg.QueryTimeout != 3*time.Second || cfg.SessionTTL != time.Hour || !cfg.CookieSecure || cfg.MaxSearchRange != 6*time.Hour {
+		t.Errorf("overrides not applied: %+v", cfg)
 	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name string
-		vars map[string]string
+		env  map[string]string
 	}{
-		{"missing database url", map[string]string{}},
+		{"missing database url", map[string]string{"INFRASCOPE_DATABASE_URL": ""}},
 		{"wrong scheme", map[string]string{"INFRASCOPE_DATABASE_URL": "mysql://u:p@db:3306/x"}},
-		{"no host", map[string]string{"INFRASCOPE_DATABASE_URL": "postgres:///x"}},
-		{"bad timeout", map[string]string{"INFRASCOPE_DATABASE_URL": "postgres://u:p@db/x", "INFRASCOPE_DEPENDENCY_TIMEOUT": "soon"}},
-		{"zero timeout", map[string]string{"INFRASCOPE_DATABASE_URL": "postgres://u:p@db/x", "INFRASCOPE_DEPENDENCY_TIMEOUT": "0s"}},
+		{"missing admin password", map[string]string{"INFRASCOPE_ADMIN_PASSWORD": ""}},
+		{"short admin password", map[string]string{"INFRASCOPE_ADMIN_PASSWORD": "short"}},
+		{"admin password over bcrypt's limit", map[string]string{"INFRASCOPE_ADMIN_PASSWORD": strings.Repeat("x", 73)}},
+		{"bad timeout", map[string]string{"INFRASCOPE_QUERY_TIMEOUT": "soon"}},
+		{"zero timeout", map[string]string{"INFRASCOPE_DEPENDENCY_TIMEOUT": "0s"}},
+		{"session ttl too short", map[string]string{"INFRASCOPE_SESSION_TTL": "1s"}},
+		{"bad boolean", map[string]string{"INFRASCOPE_COOKIE_SECURE": "sometimes"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := load(env(tt.vars)); err == nil {
+			if _, err := load(valid(tt.env)); err == nil {
 				t.Fatal("want an error, got nil")
 			}
 		})
+	}
+}
+
+func TestErrorsNeverEchoSecrets(t *testing.T) {
+	_, err := load(valid(map[string]string{
+		"INFRASCOPE_DATABASE_URL":   "mysql://u:hunter2@db/x",
+		"INFRASCOPE_ADMIN_PASSWORD": "tiny-secret",
+	}))
+	if err == nil {
+		t.Fatal("want an error, got nil")
+	}
+	for _, secret := range []string{"hunter2", "tiny-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaks %q: %v", secret, err)
+		}
 	}
 }
 
@@ -79,15 +120,5 @@ func TestDatabaseAddr(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("DatabaseAddr(%q) = %q, want %q", tt.url, got, tt.want)
 		}
-	}
-}
-
-func TestDatabaseAddrErrorHidesPassword(t *testing.T) {
-	_, err := Config{DatabaseURL: "mysql://u:hunter2@db/x"}.DatabaseAddr()
-	if err == nil {
-		t.Fatal("want an error, got nil")
-	}
-	if strings.Contains(err.Error(), "hunter2") {
-		t.Fatalf("error leaks the password: %v", err)
 	}
 }

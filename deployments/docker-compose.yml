@@ -97,12 +97,18 @@ services:
       INFRASCOPE_HTTP_ADDR: ":8081"
       INFRASCOPE_DATABASE_URL: postgres://infrascope:${INFRASCOPE_DB_PASSWORD}@postgres:5432/infrascope?sslmode=disable
       INFRASCOPE_CLICKHOUSE_URL: http://clickhouse:8123
+      INFRASCOPE_CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      INFRASCOPE_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       INFRASCOPE_PROMETHEUS_URL: http://prometheus:9090
       INFRASCOPE_COLLECTOR_HEALTH_URL: http://otel-collector:13133
       INFRASCOPE_ADMIN_USER: ${INFRASCOPE_ADMIN_USER:-admin}
       INFRASCOPE_ADMIN_PASSWORD: ${INFRASCOPE_ADMIN_PASSWORD:?set INFRASCOPE_ADMIN_PASSWORD in .env}
+      # Set to true when the dashboard is served over HTTPS.
+      INFRASCOPE_COOKIE_SECURE: ${INFRASCOPE_COOKIE_SECURE:-false}
       OTEL_SERVICE_NAME: infrascope-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
     healthcheck:
       test: ["CMD", "/usr/local/bin/api", "healthcheck"]
       interval: 5s
