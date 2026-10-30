@@ -79,7 +79,14 @@ func TestRequestIsObservable(t *testing.T) {
 		return nil
 	})
 
+	// A rate needs a counter that rises between two samples. On a fresh stack
+	// the order above is the service's first request, so its series starts
+	// at 1 and stays there, and the rate is zero. Keep a little read-only
+	// traffic flowing while waiting.
 	eventually(t, "request metrics for the service", func() error {
+		if err := s.browse(); err != nil {
+			return err
+		}
 		var list struct {
 			Services []struct {
 				Name        string   `json:"name"`
@@ -159,6 +166,19 @@ func (s stack) createOrder(t *testing.T) string {
 		t.Fatalf("X-Trace-Id = %q, want 32 lowercase hex characters", traceID)
 	}
 	return traceID
+}
+
+// browse sends one read-only request to the demo service.
+func (s stack) browse() error {
+	resp, err := s.client.Get(s.demoURL + "/products/1")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET /products/1 = %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // get calls the InfraScope API and decodes a 200 response into out. A 404 is

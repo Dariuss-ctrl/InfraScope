@@ -4,7 +4,7 @@ The end-to-end check of FR-1 ([SPEC](../../docs/SPEC.md#fr-1-telemetry-ingestion
 
 1. **The trace** (`GET /api/v1/traces/{id}`), with a root span `POST /orders` and a child database span (`db.system.name` set). The trace ID comes from the response's `X-Trace-Id` header.
 2. **Its logs** (`GET /api/v1/logs?trace_id=...`), every record linked back to the same trace.
-3. **Request metrics** (`GET /api/v1/services`), with `demo-service` reporting a request rate. That proves the OTLP → Prometheus path and its name translation (risk R4).
+3. **Request metrics** (`GET /api/v1/services`), with `demo-service` reporting a request rate. That proves the OTLP → Prometheus path and its name translation (risk R4). A rate needs a counter that rises between two samples. On a fresh stack the order is the service's first request, so its series starts at 1 and stays flat. The test therefore keeps sending read-only requests while it waits.
 
 Each signal gets 60 s to appear. That is a test timeout, not a latency claim.
 
