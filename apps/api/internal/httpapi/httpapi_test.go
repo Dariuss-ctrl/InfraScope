@@ -58,6 +58,11 @@ type fakeTelemetry struct {
 	traces     clickhouse.TracePage
 	trace      clickhouse.Trace
 	logs       clickhouse.LogPage
+	schema     clickhouse.SchemaReport
+}
+
+func (f *fakeTelemetry) InspectSchema(context.Context) (clickhouse.SchemaReport, error) {
+	return f.schema, f.err
 }
 
 func (f *fakeTelemetry) SearchTraces(_ context.Context, q clickhouse.TraceQuery) (clickhouse.TracePage, error) {
@@ -178,6 +183,7 @@ func TestEveryProtectedRouteNeedsASession(t *testing.T) {
 		{"GET", "/api/v1/traces"},
 		{"GET", "/api/v1/traces/0123456789abcdef0123456789abcdef"},
 		{"GET", "/api/v1/logs"},
+		{"GET", "/api/v1/diagnostics/schema"},
 		{"GET", "/api/v1/alert-rules"},
 		{"GET", "/api/v1/alerts"},
 		{"GET", "/api/v1/no-such-route"},
@@ -484,6 +490,55 @@ func TestBackendFailuresMapToStatusCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSchemaDiagnostics(t *testing.T) {
+	type report struct {
+		CheckedAt string           `json:"checked_at"`
+		Complete  bool             `json:"complete"`
+		Missing   []schemaItemJSON `json:"missing"`
+	}
+
+	t.Run("complete schema", func(t *testing.T) {
+		f := newFixture()
+		rec := f.do(t, request{target: "/api/v1/diagnostics/schema", token: goodToken})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		got := decodeBody[report](t, rec)
+		if !got.Complete || got.Missing == nil || len(got.Missing) != 0 || got.CheckedAt != "2026-10-30T12:00:00Z" {
+			t.Errorf("report = %+v, want complete with an empty list", got)
+		}
+	})
+
+	t.Run("missing index", func(t *testing.T) {
+		f := newFixture()
+		f.telemetry.schema = clickhouse.SchemaReport{Missing: []clickhouse.SchemaItem{
+			{Kind: "index", Table: "otel.otel_logs", Name: "idx_lower_body", Effect: "Text search in logs is slower."},
+		}}
+		got := decodeBody[report](t, f.do(t, request{target: "/api/v1/diagnostics/schema", token: goodToken}))
+		want := schemaItemJSON{Kind: "index", Table: "otel.otel_logs", Name: "idx_lower_body", Effect: "Text search in logs is slower."}
+		if got.Complete || len(got.Missing) != 1 || got.Missing[0] != want {
+			t.Errorf("report = %+v, want incomplete with %+v", got, want)
+		}
+	})
+
+	t.Run("storage down", func(t *testing.T) {
+		f := newFixture()
+		f.telemetry.err = fmt.Errorf("%w: refused", backend.ErrUnavailable)
+		rec := f.do(t, request{target: "/api/v1/diagnostics/schema", token: goodToken})
+		if rec.Code != http.StatusServiceUnavailable || errorOf(t, rec).Code != "storage_unavailable" {
+			t.Errorf("status = %d, want 503 storage_unavailable", rec.Code)
+		}
+	})
+
+	t.Run("unknown parameter", func(t *testing.T) {
+		f := newFixture()
+		rec := f.do(t, request{target: "/api/v1/diagnostics/schema?verbose=1", token: goodToken})
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
 }
 
 func TestServiceMetrics(t *testing.T) {

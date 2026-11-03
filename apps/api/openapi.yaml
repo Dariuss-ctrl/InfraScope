@@ -38,6 +38,8 @@ tags:
     description: Trace search and span trees, from ClickHouse.
   - name: logs
     description: Structured log search, correlated with traces by trace ID.
+  - name: diagnostics
+    description: The detail behind a degraded status check, for logged-in users.
   - name: alerting
     description: Threshold rules and their state history (ADR-0005).
 security:
@@ -293,6 +295,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogSearchResult" }
+        "400": { $ref: "#/components/responses/InvalidArgument" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/StorageUnavailable" }
+        "504": { $ref: "#/components/responses/QueryTimeout" }
+
+  /api/v1/diagnostics/schema:
+    get:
+      tags: [diagnostics]
+      summary: The telemetry tables and skip indexes that are missing, and what goes wrong without each.
+      description: >-
+        The detail behind a failed `clickhouse_schema` check in `/api/v1/status`, which is public and so
+        names nothing. A missing index slows searches down; a missing table makes them fail.
+      operationId: getSchemaDiagnostics
+      x-phase: 3
+      responses:
+        "200":
+          description: What is missing; an empty list when the schema is complete.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SchemaReport" }
         "400": { $ref: "#/components/responses/InvalidArgument" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "503": { $ref: "#/components/responses/StorageUnavailable" }
@@ -742,6 +764,25 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LogRecord" }
         next_cursor: { type: [string, "null"] }
+
+    SchemaReport:
+      type: object
+      required: [checked_at, complete, missing]
+      properties:
+        checked_at: { type: string, format: date-time }
+        complete: { type: boolean }
+        missing:
+          type: array
+          items: { $ref: "#/components/schemas/SchemaItem" }
+
+    SchemaItem:
+      type: object
+      required: [kind, table, name, effect]
+      properties:
+        kind: { type: string, enum: [table, index] }
+        table: { type: string, examples: [otel.otel_logs] }
+        name: { type: string, description: "The index; for a table, the table itself.", examples: [idx_lower_body] }
+        effect: { type: string, description: What goes wrong while it is missing. }
 
     AlertRuleInput:
       type: object

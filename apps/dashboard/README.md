@@ -2,12 +2,28 @@
 
 InfraScope's investigation UI: React 19, TypeScript 7 and Vite 8, linted with oxlint and tested with Vitest and Testing Library. In production it is a static build served by unprivileged nginx, which also proxies `/api/` to the Go API ([`nginx.conf`](nginx.conf)).
 
-## What exists today (Phase 0)
+## Views
 
-- The app shell: navigation for Services, Traces, Logs and Alerts. Each view states which phase builds it and which requirement specifies it.
-- A **status badge** fed by `GET /api/v1/status`, refreshed every 15 s. It names any dependency that is down, which is the start of the degraded-mode banner required by NFR-1.
+| Route | What it shows | Requirement |
+|---|---|---|
+| `/login` | The login form, with the platform status, because a database outage explains a failed login. Afterwards the user returns to the page they asked for. | NFR-3 |
+| `/services` | Each service's request rate, error rate and p50/p95/p99 latency, with charts. A click on a chart opens the traces behind that point. No data is never drawn as zero. | FR-2 |
+| `/traces` | Trace search by service, operation, duration, status and time range, newest or slowest first. | FR-3 |
+| `/traces/:traceId` | The waterfall, nested by parent span, naming the span that spent the most time and the first failure. Span details show the statement, events and attributes, and the logs written during the trace are listed below. `?span=` selects a span. | FR-3, FR-5 |
+| `/logs` | Log search by service, minimum severity, text, trace and span. Each record links to the span that wrote it. | FR-4, FR-5 |
+| `/status` | Every dependency and what breaks while it is down, and any missing ClickHouse table or index with its effect. | NFR-1 |
+| `/alerts` | Says that alerting comes in Phase 4. | FR-6 |
 
-Views are built in Phase 3 (FR-2 to FR-5) and Phase 4 (FR-6). ECharts is used for time series; the trace waterfall is a custom component.
+Every page except `/login` needs a session. A banner under the header names whatever is down and what still works.
+
+## How it is built
+
+- `src/api/` has one module per API area. `client.ts` turns every failure into an `ApiError` that carries the API's error code, so a page can say what is unavailable rather than just that something failed.
+- `src/pages/` holds the views and `src/components/` the parts they share.
+- Logic lives outside components and is unit-tested on its own: the waterfall layout and self time (`waterfall.ts`), time ranges and chart windows (`timeRange.ts`), URL filters (`links.ts`) and formatting (`format.ts`).
+- ECharts loads with the first chart, not with the login page. The waterfall is a custom component.
+- Styling is one stylesheet, [`src/index.css`](src/index.css). Colours, type and shape are tokens on `:root`, redefined for dark mode, which follows the system setting. Components never name a colour, and the charts read the same tokens. Red, amber and green only ever mean status; the accent marks what can be clicked or is selected.
+- Tests render the whole app against a fake API at the `fetch` boundary (`src/test/fakeApi.ts`). The [browser journeys](../../tests/e2e/README.md) run against the real stack.
 
 ## Scripts
 

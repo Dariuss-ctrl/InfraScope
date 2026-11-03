@@ -15,7 +15,7 @@ DURATION ?= 2m
 S        ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help up up-debug down reset ps logs smoke load demo-fix demo-reset config-check lint vulncheck test test-integration test-pipeline fmt
+.PHONY: help up up-debug down reset ps logs smoke load demo-fix demo-reset config-check lint vulncheck test test-integration test-pipeline test-e2e fmt
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -83,6 +83,11 @@ test-integration: ## API tests against disposable PostgreSQL, ClickHouse and Pro
 
 test-pipeline: .env ## End-to-end telemetry test through the API; needs a running stack (make up)
 	set -a && . ./.env && set +a && cd tests/pipeline && INFRASCOPE_PIPELINE=1 go test -count=1 -v ./...
+
+test-e2e: .env ## Browser journeys (Playwright); needs a running stack (make up)
+	cd tests/e2e && (test -d node_modules || npm ci --no-audit --no-fund) && \
+		{ [ -n "$$E2E_BROWSER_CHANNEL" ] || npx playwright install chromium; } && \
+		set -a && . ../../.env && set +a && npx playwright test
 
 fmt: ## Format Go code
 	gofmt -w $(GO_MODULES)

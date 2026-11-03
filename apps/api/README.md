@@ -11,13 +11,14 @@ InfraScope's query and configuration API: Go standard library `net/http`, JSON o
 | `GET /api/v1/services` · `GET /api/v1/services/{service}/metrics` | session | Prometheus |
 | `GET /api/v1/traces` · `GET /api/v1/traces/{traceId}` | session | ClickHouse |
 | `GET /api/v1/logs` | session | ClickHouse |
+| `GET /api/v1/diagnostics/schema` | session | ClickHouse: which tables and skip indexes are missing, and their effect |
 | `/api/v1/alert-rules`, `/api/v1/alerts` | session | `501` until Phase 4 |
 
 ## How it is built
 
 - **Nothing user-supplied becomes query text.** ClickHouse queries bind every value as a typed server-side parameter (`{service:String}`), and SQL is assembled only from constants. PromQL label values are Go-quoted, which is exactly how PromQL parses strings. Each ClickHouse query also runs with `readonly=2` and a server-side `max_execution_time`.
 - **Failures are typed.** Each client wraps errors as `backend.ErrUnavailable`, `ErrTimeout` or `ErrNotFound`, which the HTTP layer maps to `503 storage_unavailable` / `metrics_unavailable` / `database_unavailable`, `504 query_timeout` and `404`. Unexpected errors are logged and returned as a generic `500`.
-- **Degraded, not down.** The API starts and serves with ClickHouse or Prometheus unreachable; only the features that need them fail. `/api/v1/status` also reports `clickhouse_schema`, which goes down when a table or skip index the queries rely on is missing.
+- **Degraded, not down.** The API starts and serves with ClickHouse or Prometheus unreachable; only the features that need them fail. `/api/v1/status` also reports `clickhouse_schema`, which goes down when a table or skip index the queries rely on is missing. Being public, it names nothing; `/api/v1/diagnostics/schema` names what is missing and what it slows down or breaks, for a logged-in user.
 - **Keyset pagination.** Cursors encode `(sort value, tie-breaker)`, so rows sharing a timestamp or duration never skip or repeat across pages. Pages hold at most 500 results, and a trace response at most 10,000 spans (`truncated: true` beyond that).
 - **Sessions (ADR-0006).** bcrypt password hashes. Random 256-bit tokens stored only as SHA-256 hashes. An `HttpOnly`, `SameSite=Strict` cookie. A same-origin check on state-changing requests. Per-client login rate limiting (5 attempts, then one more every 12 s).
 - **Self-observability.** The API exports its own traces, metrics and logs as `infrascope-api`. Its outgoing ClickHouse and Prometheus calls appear as client spans.

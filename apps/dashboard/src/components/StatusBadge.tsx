@@ -1,14 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
-import { describeStatus, fetchStatus } from '../api/status.ts'
+import { describeStatus } from '../api/status.ts'
+import { useStatus } from '../platform.ts'
 
 // Shows the API's view of its dependencies, so a storage outage is visible
 // before a page fails to load (NFR-1).
 export function StatusBadge() {
-  const { data, isPending, isError } = useQuery({
-    queryKey: ['status'],
-    queryFn: ({ signal }) => fetchStatus(signal),
-    refetchInterval: 15_000,
-  })
+  const { data, isPending, isError } = useStatus()
 
   if (isPending) {
     return <span className="status status--pending">Checking…</span>

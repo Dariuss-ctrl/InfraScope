@@ -4,7 +4,7 @@
 
 InfraScope collects traces, metrics and logs with OpenTelemetry, stores them in ClickHouse and Prometheus, and puts one investigation workflow on top: service health → the trace of a bad request → the logs written during it → the operation that caused it. Signals are linked by trace ID rather than by matching timestamps, so each step is one click.
 
-> **Status: Phase 2 — query API.** A secured, tested API serves service metrics, trace search and detail, and log search from real telemetry. An automated [pipeline test](tests/pipeline/README.md) follows one request through the API, from trace to logs to metrics, and [integration tests](tests/integration/README.md) run against real databases. The investigation UI comes in Phase 3 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
+> **Status: Phase 3 — investigation UI.** The dashboard takes a slow request from the service overview to the span and statement that caused it, and to the logs written during it, and says on every page when part of the platform is down. [Browser journeys](tests/e2e/README.md) walk that investigation against the running stack in CI, beside the [pipeline test](tests/pipeline/README.md) and [integration tests](tests/integration/README.md) against real databases. Alerting comes in Phase 4 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
 
 ## The problem
 
@@ -59,7 +59,7 @@ docker compose --env-file .env -f deployments/docker-compose.yml up -d --build -
 bash scripts/smoke.sh
 ```
 
-Then open <http://localhost:8080>. The status badge in the header shows the API's live view of its dependencies. To watch the telemetry pipeline work end to end, run `make test-pipeline`. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
+Then open <http://localhost:8080> and log in with `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env`. The [demo walkthrough](docs/demo-script.md) takes you through an investigation. The status badge in the header shows the API's live view of its dependencies and leads to the platform status page. To check the whole system end to end, run `make test-pipeline` and `make test-e2e`. All ports bind to `127.0.0.1` by default. Operations such as logs, reset, debug ports and load generation are in the [runbook](docs/runbook.md).
 
 Try the API directly. The account is `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env`:
 
@@ -89,7 +89,7 @@ curl -b session.txt 'http://localhost:8080/api/v1/traces?service=demo-service&so
 - [x] **Phase 0:** specification, decision records, runnable skeleton, CI
 - [x] **Phase 1:** instrumented demo service and telemetry pipeline
 - [x] **Phase 2:** query API (services, traces, logs, auth)
-- [ ] **Phase 3:** investigation UI (overview, waterfall, logs, correlation)
+- [x] **Phase 3:** investigation UI (overview, waterfall, logs, correlation)
 - [ ] **Phase 4:** alerting, failure scenarios, reliability hardening
 - [ ] **Phase 5:** benchmarked v1.0 release
 

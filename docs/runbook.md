@@ -18,7 +18,8 @@ Operational procedures for a single-node InfraScope deployment. Run every comman
 | Follow logs (all, or one service) | `make logs` / `make logs S=otel-collector` | `$COMPOSE logs -f --tail=200 otel-collector` |
 | Smoke test | `make smoke` | `bash scripts/smoke.sh` |
 | Generate load against the running stack | `make load RATE=20 DURATION=2m` | `$COMPOSE --profile load run --rm --no-deps -e RATE=20 -e DURATION=2m k6` |
-| End-to-end telemetry test (needs `up-debug`) | `make test-pipeline` | see [tests/pipeline](../tests/pipeline/README.md) |
+| End-to-end telemetry test (needs a running stack) | `make test-pipeline` | see [tests/pipeline](../tests/pipeline/README.md) |
+| Browser journeys (needs a running stack) | `make test-e2e` | see [tests/e2e](../tests/e2e/README.md) |
 | Scenario S1: drop / restore the index | `make demo-reset` / `make demo-fix` | `$COMPOSE exec -T postgres psql -U postgres -d shop -c "DROP INDEX CONCURRENTLY IF EXISTS orders_customer_email_idx"` |
 | Stop, keep data | `make down` | `$COMPOSE down` |
 | Stop and **delete all data** | `make reset` | `$COMPOSE down -v --remove-orphans` |
@@ -69,6 +70,22 @@ On its first start, demo-service creates and seeds the `shop` database (1M order
 4. Restart: `$COMPOSE restart clickhouse`. The collector retries and flushes its queue.
 
 **Data-loss bounds:** while ClickHouse is down, the collector keeps telemetry in each exporter's bounded sending queue and retries for up to 300 s per batch (`retry_on_failure.max_elapsed_time`). Data beyond the queue capacity or past the retry window is dropped and counted in `otelcol_exporter_send_failed_*`. Until Phase 4 the queue is in memory, so restarting the collector during an outage loses whatever was queued.
+
+### ClickHouse schema incomplete
+
+**Symptoms:** the status badge reports `clickhouse_schema` down while `clickhouse` is up, and the banner says trace and log storage is missing tables or indexes. Without a skip index, searches still return correct results, only more slowly. Without a table, the searches that read it fail.
+
+1. Open **Platform status** in the dashboard; the status badge in the header links to it. It names each missing table or index and what it affects. The same report is at `GET /api/v1/diagnostics/schema` for a logged-in session.
+2. **A missing table:** restart the collector. It creates missing tables when it starts (`create_schema: true`, [ADR-0004](decisions/0004-exporter-managed-clickhouse-schema.md)): `$COMPOSE restart otel-collector`.
+3. **A missing index:** the collector never alters a table that exists, so add the index back from its definition in the committed DDL, `apps/api/internal/clickhouse/testdata/schema/<table>.sql`, then build it for the data already stored. For `idx_duration` on `otel_traces`:
+
+   ```bash
+   $COMPOSE exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" -q "ALTER TABLE otel.otel_traces ADD INDEX idx_duration Duration TYPE minmax GRANULARITY 1"'
+   $COMPOSE exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" -q "ALTER TABLE otel.otel_traces MATERIALIZE INDEX idx_duration"'
+   ```
+
+   New data is indexed as soon as the index exists; `MATERIALIZE INDEX` builds it for older parts in the background.
+4. The check turns green at the next status refresh, within 15 s.
 
 ### Collector is refusing or dropping data
 

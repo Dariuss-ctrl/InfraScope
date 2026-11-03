@@ -27,6 +27,7 @@ type TelemetryStore interface {
 	SearchTraces(ctx context.Context, q clickhouse.TraceQuery) (clickhouse.TracePage, error)
 	GetTrace(ctx context.Context, traceID string, maxSpans int) (clickhouse.Trace, error)
 	SearchLogs(ctx context.Context, q clickhouse.LogQuery) (clickhouse.LogPage, error)
+	InspectSchema(ctx context.Context) (clickhouse.SchemaReport, error)
 }
 
 // MetricStore reads service metrics (*prometheus.Client).
@@ -99,6 +100,7 @@ func NewRouter(d Deps) http.Handler {
 	mux.Handle("GET /api/v1/traces", a.session(a.searchTraces))
 	mux.Handle("GET /api/v1/traces/{traceId}", a.session(a.getTrace))
 	mux.Handle("GET /api/v1/logs", a.session(a.searchLogs))
+	mux.Handle("GET /api/v1/diagnostics/schema", a.session(a.schemaDiagnostics))
 	// Alerting arrives in Phase 4.
 	mux.Handle("/api/v1/alert-rules", a.session(notImplemented))
 	mux.Handle("/api/v1/alert-rules/", a.session(notImplemented))

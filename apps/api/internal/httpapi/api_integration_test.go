@@ -280,6 +280,12 @@ func TestJourneyThroughTheContract(t *testing.T) {
 		}
 	}
 
+	// The schema the collector created is complete, so nothing is missing.
+	resp, body = call(t, h, apiCall{path: "/api/v1/diagnostics/schema", token: token})
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"complete":true`) || !strings.Contains(string(body), `"missing":[]`) {
+		t.Errorf("schema diagnostics = %d %s, want a complete schema", resp.StatusCode, body)
+	}
+
 	if resp, _ := call(t, h, apiCall{method: "POST", path: "/api/v1/auth/logout", token: token}); resp.StatusCode != 204 {
 		t.Errorf("logout = %d", resp.StatusCode)
 	}
@@ -293,7 +299,7 @@ func TestAuthenticationFailures(t *testing.T) {
 	h := stack{}.handler()
 
 	for _, path := range []string{"/api/v1/auth/me", "/api/v1/services", "/api/v1/traces", "/api/v1/logs",
-		"/api/v1/traces/" + fx.OrdersRead, "/api/v1/services/checkout/metrics"} {
+		"/api/v1/traces/" + fx.OrdersRead, "/api/v1/services/checkout/metrics", "/api/v1/diagnostics/schema"} {
 		if resp, body := call(t, h, apiCall{path: path}); resp.StatusCode != 401 || errorCode(t, body) != "unauthenticated" {
 			t.Errorf("GET %s without a session = %d %s", path, resp.StatusCode, body)
 		}

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.3 · Phase 2 (query API) |
+| **Status** | Draft v0.4 · Phase 3 (investigation UI) |
 | **Last updated** | 2026-10-30 |
 | **Related** | [Architecture](architecture.md) · [Decision records](decisions/README.md) · [Runbook](runbook.md) · [Demo walkthrough](demo-script.md) · [Benchmark method](benchmarks/README.md) · [API contract](../apps/api/openapi.yaml) |
 
@@ -281,6 +281,7 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 | `GET /api/v1/traces` | session | ClickHouse | 2 ✅ |
 | `GET /api/v1/traces/{traceId}` | session | ClickHouse | 2 ✅ |
 | `GET /api/v1/logs` | session | ClickHouse | 2 ✅ |
+| `GET /api/v1/diagnostics/schema` | session | ClickHouse (missing tables and skip indexes, with their effect) | 3 ✅ |
 | `GET, POST /api/v1/alert-rules` · `GET, PUT, DELETE /api/v1/alert-rules/{id}` | session | PostgreSQL | 4 |
 | `GET /api/v1/alerts` | session | PostgreSQL | 4 |
 
@@ -338,8 +339,8 @@ The load generator is `tests/load/workload.js` (k6). The request mix and arrival
 | Unit (Go) | `testing`, table-driven, `httptest` | readiness aggregation, query builders (SQL and PromQL), validation, cursor encoding, alert state machine | every PR |
 | Unit (UI) | Vitest + Testing Library | span-tree → waterfall layout, URL state, formatting, empty and error states | every PR |
 | Integration | `testcontainers-go` (ClickHouse, PostgreSQL, Prometheus) | repositories and HTTP handlers against real databases; **schema-drift test** comparing the exporter-created DDL with a committed snapshot ([ADR-0004](decisions/0004-exporter-managed-clickhouse-schema.md)); degraded mode with a stopped container | every PR |
-| Pipeline | Docker Compose + Go test | request → collector → storage → API, polling until visible (AC-1.4) | `main` and nightly |
-| End-to-end | Playwright against the Compose stack | login; overview → trace → logs → trace; degraded banner | `main` and nightly |
+| Pipeline | Docker Compose + Go test | request → collector → storage → API, polling until visible (AC-1.4) | every PR |
+| End-to-end | Playwright against the Compose stack | login; overview → trace → logs → trace; missing-index diagnosis; outage banners | every PR |
 | Load | k6 | reference workload and benchmark reports (NFR-2) | before each release |
 
 **Requirement coverage**
@@ -349,7 +350,7 @@ The load generator is `tests/load/workload.js` (k6). The request mix and arrival
 | Unit | FR-3 (AC-3.1, AC-3.3), FR-4 (AC-4.1), FR-6 (AC-6.1, AC-6.3), NFR-3 |
 | Integration | FR-2 (AC-2.1), FR-3 (AC-3.4), FR-6 (AC-6.2), NFR-1, NFR-4 |
 | Pipeline | FR-1 |
-| End-to-end | FR-5, NFR-1 |
+| End-to-end | FR-2 (AC-2.3), FR-3, FR-5 (AC-5.1, AC-5.2), NFR-1, NFR-3 |
 | Smoke | FR-7 |
 | Load | FR-8, NFR-2 |
 

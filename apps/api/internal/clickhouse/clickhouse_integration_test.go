@@ -291,6 +291,19 @@ func TestMissingIndexDegradesButStaysCorrect(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "otel.otel_traces.idx_duration") {
 		t.Fatalf("CheckSchema = %v, want it to name the missing index", err)
 	}
+	// The report names exactly what was dropped, and what it slows down, for
+	// the dashboard's diagnostics.
+	report, err := client.InspectSchema(ctx)
+	if err != nil {
+		t.Fatalf("InspectSchema: %v", err)
+	}
+	if len(report.Missing) != 1 {
+		t.Fatalf("InspectSchema missing = %+v, want only idx_duration", report.Missing)
+	}
+	if got := report.Missing[0]; got.Kind != "index" || got.Table != "otel.otel_traces" ||
+		got.Name != "idx_duration" || !strings.Contains(got.Effect, "duration") {
+		t.Errorf("InspectSchema missing = %+v, want index otel.otel_traces idx_duration and its effect", got)
+	}
 	from, to := window(0, 5*time.Minute)
 	d := 200 * time.Millisecond
 	page, err := client.SearchTraces(ctx, TraceQuery{From: from, To: to, MinDuration: &d, Limit: 10})
