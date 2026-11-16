@@ -52,6 +52,8 @@ The first start builds the images and fills the demo shop's database with a mill
 
 **Checkpoint:** open <http://localhost:8080> and log in with `INFRASCOPE_ADMIN_USER` and `INFRASCOPE_ADMIN_PASSWORD` from `.env`. The badge in the header says **All systems up**. If it names a dependency instead, click it: the status page says what is down and what still works.
 
+The first time you open each page, a short tip in the corner explains it. **Got it** puts that one away, **Skip all tips** turns them all off, and the **?** in the header brings the current page's tip back.
+
 ## Part 2: Watch a service
 
 The stack includes `demo-service`, a small shop API instrumented with OpenTelemetry, and a k6 script that sends it realistic traffic. Start the traffic in a **second terminal** and leave it running for the rest of the tutorial:

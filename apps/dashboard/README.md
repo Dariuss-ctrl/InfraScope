@@ -16,7 +16,7 @@ InfraScope's investigation UI: React 19, TypeScript 7 and Vite 8, linted with ox
 | `/deployments/:deploymentId` | One deployment: the verdict and its reasons, the most affected route, the before/after table and the same counts per route, the PromQL behind every number, links to the failing traces and error logs of the after window, and the status history, including statuses that arrived too late to apply. | FR-9 |
 | `/alerts` | Says that alerting comes in Phase 5. | FR-6 |
 
-Every page except `/login` needs a session. A banner under the header names whatever is down and what still works.
+Every page except `/login` needs a session. A banner under the header names whatever is down and what still works. The first visit to each page shows a short tip explaining it ([`tips.ts`](src/tips.ts)). It can be dismissed per page or skipped altogether, the header's **?** brings it back, and the choice is kept in the browser.
 
 ## How it is built
 

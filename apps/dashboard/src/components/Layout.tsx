@@ -1,10 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { logout } from '../api/auth.ts'
 import { describeError } from '../api/client.ts'
 import { sessionKey, useSession } from '../session.ts'
+import { showTip, tipFor } from '../tips.ts'
 import { views } from '../views.ts'
 import { Logo } from './Icons.tsx'
+import { PageTip } from './PageTip.tsx'
 import { StatusBadge } from './StatusBadge.tsx'
 import { StatusBanner } from './StatusBanner.tsx'
 
@@ -22,6 +24,7 @@ export function Layout() {
     },
   })
   const username = session.data?.username ?? ''
+  const tip = tipFor(useLocation().pathname)
 
   return (
     <div className="shell">
@@ -44,6 +47,17 @@ export function Layout() {
             <Link to="/status" className="status-link">
               <StatusBadge />
             </Link>
+            {tip && (
+              <button
+                type="button"
+                className="help-button"
+                aria-label="Explain this page"
+                title="Explain this page"
+                onClick={() => showTip(tip)}
+              >
+                ?
+              </button>
+            )}
             <div className="user">
               <span className="avatar" aria-hidden="true">
                 {username.slice(0, 1)}
@@ -70,6 +84,7 @@ export function Layout() {
       <main className="main">
         <Outlet />
       </main>
+      <PageTip tip={tip} />
     </div>
   )
 }

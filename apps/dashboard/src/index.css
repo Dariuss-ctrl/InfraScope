@@ -1339,6 +1339,73 @@ input[type='checkbox'] {
   font-size: 0.9375rem;
 }
 
+/* Page tips: the first-visit explanation of a page. It floats in a corner,
+   never over the header, and takes no focus, so it can be ignored. */
+.page-tip {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 20;
+  display: grid;
+  gap: 0.625rem;
+  width: min(23rem, calc(100vw - 3rem));
+  padding: 1rem 1.125rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow:
+    0 10px 30px rgb(15 23 42 / 0.16),
+    var(--shadow);
+}
+
+.page-tip__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.page-tip__title svg {
+  color: var(--accent);
+}
+
+.page-tip__points {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0;
+  padding-left: 1.125rem;
+  color: var(--text-2);
+  font-size: 0.875rem;
+}
+
+.page-tip__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The header's way back to the current page's tip. */
+.help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-weight: 650;
+}
+
+.help-button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* The deployments drawn on a service's charts, as links to their verdicts. */
 .deploy-markers {
   display: grid;
@@ -1779,6 +1846,14 @@ input[type='checkbox'] {
 
   .results tbody th {
     white-space: normal;
+  }
+
+  /* On a phone the tip becomes a sheet along the bottom edge. */
+  .page-tip {
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    width: auto;
   }
 
   .topbar__inner {
