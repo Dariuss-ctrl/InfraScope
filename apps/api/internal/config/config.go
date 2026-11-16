@@ -47,7 +47,23 @@ type Config struct {
 	QueryTimeout time.Duration
 	// MaxSearchRange is the widest time window a trace or log search may cover.
 	MaxSearchRange time.Duration
+
+	// GitHubWebhookSecret authenticates deployment webhooks (FR-9). Empty
+	// turns the webhook route off.
+	GitHubWebhookSecret string
+	// DeployRadarWindow is the length of each comparison window, and
+	// DeployRadarSettle the gap left after a deployment before the after
+	// window starts (restart, counter resets).
+	DeployRadarWindow time.Duration
+	DeployRadarSettle time.Duration
+	// DeployRadarMinRequests is the traffic each window needs before the
+	// comparison gives a verdict other than insufficient_data.
+	DeployRadarMinRequests int
 }
+
+// minWebhookSecret is the shortest secret accepted. GitHub recommends a
+// random string with high entropy; 16 characters is the floor, not advice.
+const minWebhookSecret = 16
 
 // Load reads the configuration from the process environment. Defaults match
 // the service names in deployments/docker-compose.yml.
@@ -63,15 +79,16 @@ func load(getenv func(string) string) (Config, error) {
 		return fallback
 	}
 	cfg := Config{
-		HTTPAddr:           env("INFRASCOPE_HTTP_ADDR", DefaultHTTPAddr),
-		DatabaseURL:        getenv("INFRASCOPE_DATABASE_URL"),
-		ClickHouseURL:      baseURL(env("INFRASCOPE_CLICKHOUSE_URL", "http://clickhouse:8123")),
-		ClickHouseUser:     env("INFRASCOPE_CLICKHOUSE_USER", "default"),
-		ClickHousePassword: getenv("INFRASCOPE_CLICKHOUSE_PASSWORD"),
-		PrometheusURL:      baseURL(env("INFRASCOPE_PROMETHEUS_URL", "http://prometheus:9090")),
-		CollectorHealthURL: baseURL(env("INFRASCOPE_COLLECTOR_HEALTH_URL", "http://otel-collector:13133")),
-		AdminUser:          env("INFRASCOPE_ADMIN_USER", "admin"),
-		AdminPassword:      getenv("INFRASCOPE_ADMIN_PASSWORD"),
+		HTTPAddr:            env("INFRASCOPE_HTTP_ADDR", DefaultHTTPAddr),
+		DatabaseURL:         getenv("INFRASCOPE_DATABASE_URL"),
+		ClickHouseURL:       baseURL(env("INFRASCOPE_CLICKHOUSE_URL", "http://clickhouse:8123")),
+		ClickHouseUser:      env("INFRASCOPE_CLICKHOUSE_USER", "default"),
+		ClickHousePassword:  getenv("INFRASCOPE_CLICKHOUSE_PASSWORD"),
+		PrometheusURL:       baseURL(env("INFRASCOPE_PROMETHEUS_URL", "http://prometheus:9090")),
+		CollectorHealthURL:  baseURL(env("INFRASCOPE_COLLECTOR_HEALTH_URL", "http://otel-collector:13133")),
+		AdminUser:           env("INFRASCOPE_ADMIN_USER", "admin"),
+		AdminPassword:       getenv("INFRASCOPE_ADMIN_PASSWORD"),
+		GitHubWebhookSecret: getenv("INFRASCOPE_GITHUB_WEBHOOK_SECRET"),
 	}
 
 	var errs []error
@@ -92,6 +109,21 @@ func load(getenv func(string) string) (Config, error) {
 	durationVar(&cfg.QueryTimeout, "INFRASCOPE_QUERY_TIMEOUT", 10*time.Second, time.Millisecond, 5*time.Minute)
 	durationVar(&cfg.SessionTTL, "INFRASCOPE_SESSION_TTL", 12*time.Hour, 5*time.Minute, 30*24*time.Hour)
 	durationVar(&cfg.MaxSearchRange, "INFRASCOPE_MAX_SEARCH_RANGE", 24*time.Hour, time.Minute, 7*24*time.Hour)
+	durationVar(&cfg.DeployRadarWindow, "INFRASCOPE_DEPLOYRADAR_WINDOW", 10*time.Minute, time.Minute, 24*time.Hour)
+	durationVar(&cfg.DeployRadarSettle, "INFRASCOPE_DEPLOYRADAR_SETTLE", 2*time.Minute, 0, time.Hour)
+
+	cfg.DeployRadarMinRequests = 200
+	if raw := getenv("INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 1_000_000 {
+			errs = append(errs, fmt.Errorf("INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS: want a whole number from 1 to 1000000, got %q", raw))
+		} else {
+			cfg.DeployRadarMinRequests = n
+		}
+	}
+	if s := cfg.GitHubWebhookSecret; s != "" && len(s) < minWebhookSecret {
+		errs = append(errs, fmt.Errorf("INFRASCOPE_GITHUB_WEBHOOK_SECRET must be at least %d characters", minWebhookSecret))
+	}
 
 	if raw := getenv("INFRASCOPE_COOKIE_SECURE"); raw != "" {
 		secure, err := strconv.ParseBool(raw)

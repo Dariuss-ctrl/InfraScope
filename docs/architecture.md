@@ -15,7 +15,7 @@ This document describes how InfraScope is put together and why. Requirements are
 | Component | Technology (pinned) | Responsibility | Listens on | State |
 |---|---|---|---|---|
 | `demo-service` | Go 1.27, OpenTelemetry SDK | The system under observation: a toy shop API | `8082` | data in PostgreSQL `shop` |
-| `otel-collector` | otelcol-contrib 0.164.0 | Receive OTLP; limit memory; enrich; batch; export | `4317` gRPC, `4318` HTTP, `13133` health, `8888` own metrics | exporter queues (in memory; on disk from Phase 4) |
+| `otel-collector` | otelcol-contrib 0.164.0 | Receive OTLP; limit memory; enrich; batch; export | `4317` gRPC, `4318` HTTP, `13133` health, `8888` own metrics | exporter queues (in memory; on disk from Phase 5) |
 | `clickhouse` | ClickHouse 26.8 (LTS) | Trace and log storage | `8123` HTTP, `9000` native, `9363` metrics | volume `clickhouse-data` |
 | `prometheus` | Prometheus 3.15 | Metric storage (OTLP push + scrapes) | `9090` | volume `prometheus-data` |
 | `postgres` | PostgreSQL 18 | `infrascope` (users, sessions, alert rules and state); `shop` (demo data) | `5432` | volume `postgres-data` |
@@ -31,7 +31,7 @@ flowchart LR
 
   subgraph apps["Instrumented applications"]
     demo["demo-service<br/>Go + OTel SDK"]
-    inv["inventory<br/>Phase 4"]
+    inv["inventory<br/>Phase 5"]
   end
   demo -->|"HTTP + traceparent"| inv
   demo -->|SQL| pgshop[("PostgreSQL<br/>db: shop")]
@@ -84,7 +84,7 @@ sequenceDiagram
   Note over C,CH: On failure the exporter retries with backoff and keeps data in its bounded queue. Data beyond capacity is dropped and counted.
 ```
 
-- **Why exporter-side batching:** ClickHouse performs best with large inserts. The ClickHouse exporter documentation recommends the exporter's own `sending_queue.batch` over the standalone `batch` processor, because batches then sit in the same queue that retries and (from Phase 4) persists them.
+- **Why exporter-side batching:** ClickHouse performs best with large inserts. The ClickHouse exporter documentation recommends the exporter's own `sending_queue.batch` over the standalone `batch` processor, because batches then sit in the same queue that retries and (from Phase 5) persists them.
 - **Back-pressure:** when the collector is over its memory limit, `memory_limiter` makes the OTLP receiver return a retryable error. SDK exporters back off instead of the collector crashing.
 
 ### 4.2 Query path
@@ -125,7 +125,7 @@ sequenceDiagram
 
 The time bounds turn both lookups into partition-pruned reads instead of scans across the whole retention window.
 
-### 4.4 Alert evaluation (Phase 4)
+### 4.4 Alert evaluation (Phase 5)
 
 ```mermaid
 sequenceDiagram
@@ -141,6 +141,29 @@ sequenceDiagram
 ```
 
 The state transition is a pure function, which is why it can be tested exhaustively with table-driven tests ([ADR-0005](decisions/0005-alert-evaluation-in-the-api.md)).
+
+### 4.5 DeployRadar: deployment → verdict (Phase 4)
+
+```mermaid
+sequenceDiagram
+  participant GH as GitHub
+  participant A as API (webhook)
+  participant PG as PostgreSQL
+  participant W as Comparison worker (15 s)
+  participant P as Prometheus
+  GH->>A: POST /api/v1/webhooks/github (X-Hub-Signature-256)
+  A->>A: verify HMAC; reject before storing anything
+  A->>PG: INSERT webhook_deliveries ON CONFLICT DO NOTHING
+  A->>PG: one transaction: upsert deployment, lock its row, append the change,<br/>apply the precedence rule, queue a comparison on the first success
+  loop every 15 s
+    W->>PG: claim due comparisons (FOR UPDATE SKIP LOCKED, 2-minute lease)
+    W->>P: increase() over each window: requests, 5xx, p95
+    W->>W: verdict = Judge(before, after)
+    W->>PG: store values, exact PromQL, verdict, confidence
+  end
+```
+
+The worker runs inside the API, like the alert evaluator, but its claims are row locks, so several API instances can run it at once ([ADR-0007](decisions/0007-deployment-health-comparison.md)).
 
 ## 5. Deployment topology
 

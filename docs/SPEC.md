@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.4 · Phase 3 (investigation UI) |
-| **Last updated** | 2026-10-30 |
+| **Status** | Draft v0.5 · Phase 4 (DeployRadar) |
+| **Last updated** | 2026-11-15 |
 | **Related** | [Architecture](architecture.md) · [Decision records](decisions/README.md) · [Runbook](runbook.md) · [Demo walkthrough](demo-script.md) · [Benchmark method](benchmarks/README.md) · [API contract](../apps/api/openapi.yaml) |
 
 ---
@@ -120,7 +120,7 @@ Logs can be filtered by time range, service, minimum severity, free text in the 
 - **AC-5.1** Every view keeps its filters in the URL, so an investigation can be bookmarked or shared and the browser's back and forward buttons work.
 - **AC-5.2** The e2e test completes the round trip overview → trace → logs → trace without typing an ID.
 
-### FR-6 Alerting · Phase 4
+### FR-6 Alerting · Phase 5
 
 Threshold rules are stored in PostgreSQL and evaluated by the API ([ADR-0005](decisions/0005-alert-evaluation-in-the-api.md)).
 
@@ -141,12 +141,26 @@ Threshold rules are stored in PostgreSQL and evaluated by the API ([ADR-0005](de
 - **AC-7.1** On a clean clone with Docker installed, `cp .env.example .env && make up && make smoke` succeeds. CI runs the same steps.
 - **AC-7.2** Only the dashboard, the demo service and the OTLP ports are published, and they bind to `127.0.0.1` by default ([§10](#10-security-model)).
 
-### FR-8 Demonstration workload · Phase 1 (S1), Phase 4 (S2, S3)
+### FR-8 Demonstration workload · Phase 1 (S1), Phase 4 (S4), Phase 5 (S2, S3)
 
 A small instrumented Go service (`demo-service`, a toy shop) and a k6 load script generate realistic traffic and reproducible failures. The scenarios are described in [§9](#9-demo-service-and-fault-scenarios).
 
 - **AC-8.1** `make load` runs the documented request mix ([benchmarks](benchmarks/README.md#reference-workload)) at a configurable rate and duration.
-- **AC-8.2** Each scenario (S1–S3) can be turned on and reset with a documented command, and is diagnosable through the InfraScope UI alone.
+- **AC-8.2** Each scenario (S1–S4) can be turned on and reset with a documented command, and is diagnosable through the InfraScope UI alone.
+
+### FR-9 DeployRadar: deployments and their effect on health · Phase 4
+
+GitHub `deployment_status` webhooks become deployment records. After each successful deployment, the API compares the service's error rate and p95 latency before and after it, in Prometheus, and stores a verdict with the evidence behind it ([ADR-0007](decisions/0007-deployment-health-comparison.md)). Ingestion is unchanged: a deployment is matched to its metrics by the `service_name` and `deployment_environment_name` labels, and no metric data is copied into PostgreSQL.
+
+- **Intake:** `POST /api/v1/webhooks/github`, authenticated by `X-Hub-Signature-256` (HMAC-SHA256 of the body with `INFRASCOPE_GITHUB_WEBHOOK_SECRET`). Every verified delivery is stored before it is processed. A repeated delivery ID is answered as a duplicate unless its first attempt failed, so GitHub's redeliver button still works. The service is `deployment.payload.service`, falling back to the repository name; the environment is the status's, falling back to the deployment's.
+- **Precedence:** statuses are applied by their own time, not their arrival order. A non-terminal status never replaces a terminal one (`success`, `failure`, `error`), and `inactive` is recorded but keeps the outcome. The history keeps every delivered status, including the ones not applied.
+- **Comparison:** the first `success` at T queues one comparison: before `[T−W, T)`, after `[T+S, T+S+W)` (`INFRASCOPE_DEPLOYRADAR_WINDOW`, default 10 min; `INFRASCOPE_DEPLOYRADAR_SETTLE`, default 2 min). Once the after window has closed, a worker in the API measures requests, 5xx responses and p95 latency with `increase()` over each window, and stores the values with the exact PromQL, evaluation time and range behind each.
+- **Verdict:** `insufficient_data` when either window has fewer than `INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS` (default 200) requests, or no series. Otherwise, per signal: the error rate by a two-proportion z-test (p < 0.01 and a change of at least one percentage point), and p95 of non-5xx responses (failures are often fast, so counting them would hide a slowdown) by a ratio of 1.25 and at least 25 ms. The overall verdict is a regression if either signal regressed, otherwise an improvement if either improved, and comes with a confidence. Two caveats keep the verdict but cap its confidence at 0.5 and say why: request counts that differ by more than ×2 between the windows, and another deployment of the same service inside a window.
+- **UI:** a Deployments view lists deployments with their state and verdict. A deployment's page shows the verdict, its reasons, the before/after table, the PromQL behind every number, the status history, and links to the failing traces and error logs of the after window.
+- **AC-9.1** Signature verification rejects a wrong secret, a tampered body, a missing header and a prefix other than `sha256=`, and nothing is stored for a rejected request.
+- **AC-9.2** A repeated delivery is not applied twice. Concurrent and out-of-order statuses for one deployment converge on the same final state, and a late `in_progress` never un-finishes a deployment (integration tests against PostgreSQL).
+- **AC-9.3** Against backfilled Prometheus history with a known error-rate jump at the deployment, the engine stores `regression` with the counts and the queries, and a low-traffic service gets `insufficient_data` (integration test).
+- **AC-9.4** On the running stack, `make demo-deploy V=v2 ERROR_RATE=0.2` under `make load` produces a `regression` verdict, shown on the deployment's page and through the API.
 
 ---
 
@@ -154,13 +168,13 @@ A small instrumented Go service (`demo-service`, a toy shop) and a k6 load scrip
 
 | ID | Requirement | Target / approach | Verified by |
 |---|---|---|---|
-| **NFR-1** | **Reliability: degraded mode.** Losing one storage backend degrades the matching features instead of breaking the product. | If ClickHouse is down, the service overview (Prometheus) still works and the trace and log views show a *storage unavailable* state. If Prometheus is down, the reverse happens. The API answers within the per-dependency timeout (default 2 s) with `503 storage_unavailable` or `503 metrics_unavailable`; it never hangs. `GET /api/v1/status` reports each dependency, and the dashboard shows a banner. During short outages the collector queues telemetry and retries, up to the queue capacity. From Phase 4 the queue is persisted to disk so it survives a collector restart. | Integration test that stops the ClickHouse container; e2e test for the banner; Phase 4 outage checklist ([runbook](runbook.md)). |
+| **NFR-1** | **Reliability: degraded mode.** Losing one storage backend degrades the matching features instead of breaking the product. | If ClickHouse is down, the service overview (Prometheus) still works and the trace and log views show a *storage unavailable* state. If Prometheus is down, the reverse happens. The API answers within the per-dependency timeout (default 2 s) with `503 storage_unavailable` or `503 metrics_unavailable`; it never hangs. `GET /api/v1/status` reports each dependency, and the dashboard shows a banner. During short outages the collector queues telemetry and retries, up to the queue capacity. From Phase 5 the queue is persisted to disk so it survives a collector restart. | Integration test that stops the ClickHouse container; e2e test for the banner; Phase 5 outage checklist ([runbook](runbook.md)). |
 | **NFR-2** | **Performance: measured, not promised.** | No latency or throughput figure is claimed until it has been measured. The [benchmark method](benchmarks/README.md) records API p50/p95/p99 per endpoint, ingest-to-query lag, collector refused or dropped items, and container CPU and memory at a documented workload and on documented hardware. **Guard rails** are design limits, not performance claims: page size ≤ 500 (default 50), search range ≤ 24 h by default (configurable), and a ClickHouse `max_execution_time` of 10 s for every API query, so no single request can monopolise the database. | k6 runs per release; reports kept in `docs/benchmarks/reports/`. |
-| **NFR-3** | **Security.** | Login is required for every API route except health, status and login. Sessions are server-side, using random 256-bit tokens stored hashed, in an `HttpOnly`, `SameSite=Strict` cookie that is `Secure` when served over TLS. Passwords are stored as bcrypt hashes. Login attempts are rate-limited. Databases and Prometheus are never published. Secrets exist only in `.env` (git-ignored) and in server-side environment variables; the frontend never receives a credential. All ClickHouse queries use bound parameters, and the API uses a read-only ClickHouse user from Phase 4. Telemetry content is treated as untrusted input ([§10](#10-security-model)). | Unit tests for query building (no string concatenation of user input); integration tests for authentication; `govulncheck` and `npm audit` in CI. |
+| **NFR-3** | **Security.** | Login is required for every API route except health, status, login and the GitHub webhook, which is authenticated by its signature instead. Sessions are server-side, using random 256-bit tokens stored hashed, in an `HttpOnly`, `SameSite=Strict` cookie that is `Secure` when served over TLS. Passwords are stored as bcrypt hashes. Login attempts are rate-limited. Databases and Prometheus are never published. Secrets exist only in `.env` (git-ignored) and in server-side environment variables; the frontend never receives a credential. All ClickHouse queries use bound parameters, and the API uses a read-only ClickHouse user from Phase 5. Telemetry content is treated as untrusted input ([§10](#10-security-model)). | Unit tests for query building (no string concatenation of user input); integration tests for authentication; `govulncheck` and `npm audit` in CI. |
 | **NFR-4** | **Data retention.** Telemetry cannot grow without bound. | Traces and logs: table TTL from `TELEMETRY_TTL` (default `72h`). Partitions are daily and `ttl_only_drop_parts` is set, so expired data is removed by dropping whole parts. Metrics: Prometheus keeps 7 days or 2 GB, whichever is reached first. The collector's queue is bounded. | `SHOW CREATE TABLE` shows the TTL (integration test); the runbook includes a disk-usage check. |
 | **NFR-5** | **Testing.** | Unit, integration, pipeline, end-to-end and load tests ([§11](#11-testing-strategy)). Coverage is reported, not targeted. | CI on every pull request. |
 | **NFR-6** | **Reproducibility.** | Image tags and dependency versions are pinned and lockfiles are committed. Demo seed data is deterministic (fixed RNG seed). Every operation runs through a documented command, and benchmark reports record the hardware and versions used. | CI starts the stack from a clean checkout. |
-| **NFR-7** | **Self-observability.** | Prometheus scrapes the collector's internal metrics, ClickHouse's built-in metrics endpoint and itself. The API is instrumented with OpenTelemetry as `infrascope-api` and appears in the dashboard under a *Platform* group. The runbook lists the signals to check first. | Platform view in the UI (Phase 4); the runbook's checks reference real metric names. |
+| **NFR-7** | **Self-observability.** | Prometheus scrapes the collector's internal metrics, ClickHouse's built-in metrics endpoint and itself. The API is instrumented with OpenTelemetry as `infrascope-api` and appears in the dashboard under a *Platform* group. The runbook lists the signals to check first. | Platform view in the UI (Phase 5); the runbook's checks reference real metric names. |
 
 ---
 
@@ -236,6 +250,10 @@ The `infrascope` database is managed by versioned migrations in `apps/api/intern
 |---|---|---|
 | `users` *(Phase 2)* | `id`, `username` (unique), `password_hash`, `created_at`, `updated_at` | The admin is created or updated from `.env` at startup. |
 | `sessions` *(Phase 2)* | `token_hash` (PK, SHA-256 of the token), `user_id`, `created_at`, `expires_at` | Server-side sessions make logout and revocation real. |
+| `webhook_deliveries` *(Phase 4)* | `delivery_id` (PK), `event`, `payload`, `received_at`, `outcome`, `error`, `processed_at` | Every verified webhook, stored before it is processed. The key makes redeliveries idempotent. |
+| `deployments` *(Phase 4)* | `id`, `provider` + `provider_deployment_id` (unique), `service`, `environment`, `ref`, `sha`, `state`, `state_at`, `finished_at` | `service` and `environment` hold Prometheus label values, so no service registry is needed. |
+| `deployment_changes` *(Phase 4)* | `id`, `deployment_id`, `delivery_id`, `state`, `state_at`, `applied` | Append-only status history, including the statuses the precedence rule did not apply. |
+| `deployment_comparisons` *(Phase 4)* | `deployment_id` (unique), the two windows, request and error counts and p95 per window, verdicts, `confidence`, `reasons`, `queries`, `status`, `attempts`, `claimed_at` | The measured values and the exact PromQL behind them; metric series stay in Prometheus. |
 | `alert_rules` | `id`, `name` (unique), `service`, `signal`, `comparator`, `threshold`, `window_seconds`, `for_seconds`, `enabled`, `created_at`, `updated_at` | `CHECK` constraints mirror API validation. |
 | `alert_rule_state` | `rule_id` (PK), `state`, `since`, `last_value`, `last_evaluated_at` | Lets the evaluator resume after a restart. |
 | `alert_events` | `id`, `rule_id`, `state`, `value`, `observed_at` | History; index on `(rule_id, observed_at DESC)`. |
@@ -259,11 +277,14 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 | `unauthenticated` | 401 | no, invalid or expired session |
 | `forbidden` | 403 | a state-changing request from another origin |
 | `not_found` | 404 | unknown trace, service, … |
+| `invalid_signature` | 401 | a webhook's `X-Hub-Signature-256` does not match its body |
+| `payload_too_large` | 413 | a webhook body over 1 MiB |
 | `rate_limited` | 429 | too many login attempts |
 | `not_implemented` | 501 | endpoint defined in the contract but not built yet |
 | `storage_unavailable` | 503 | ClickHouse unreachable |
 | `metrics_unavailable` | 503 | Prometheus unreachable |
 | `database_unavailable` | 503 | PostgreSQL unreachable. A session that cannot be checked is a 503, never a 401, so an outage logs nobody out. |
+| `webhooks_disabled` | 503 | no `INFRASCOPE_GITHUB_WEBHOOK_SECRET` is set |
 | `query_timeout` | 504 | the query exceeded its time limit (`INFRASCOPE_QUERY_TIMEOUT`, default 10 s) |
 | `internal` | 500 | unexpected failure (details are logged, never returned) |
 
@@ -282,8 +303,10 @@ The **[OpenAPI 3.1 contract](../apps/api/openapi.yaml) is the source of truth**.
 | `GET /api/v1/traces/{traceId}` | session | ClickHouse | 2 ✅ |
 | `GET /api/v1/logs` | session | ClickHouse | 2 ✅ |
 | `GET /api/v1/diagnostics/schema` | session | ClickHouse (missing tables and skip indexes, with their effect) | 3 ✅ |
-| `GET, POST /api/v1/alert-rules` · `GET, PUT, DELETE /api/v1/alert-rules/{id}` | session | PostgreSQL | 4 |
-| `GET /api/v1/alerts` | session | PostgreSQL | 4 |
+| `POST /api/v1/webhooks/github` | HMAC signature | PostgreSQL | 4 ✅ |
+| `GET /api/v1/deployments` · `GET /api/v1/deployments/{id}` | session | PostgreSQL (with each comparison's verdict and evidence) | 4 ✅ |
+| `GET, POST /api/v1/alert-rules` · `GET, PUT, DELETE /api/v1/alert-rules/{id}` | session | PostgreSQL | 5 |
+| `GET /api/v1/alerts` | session | PostgreSQL | 5 |
 
 ---
 
@@ -301,15 +324,16 @@ Three details make the signals link up:
 |---|---|
 | `GET /products`, `GET /products/{id}` | the common, fast reads |
 | `GET /orders?customer_email=` | customer order history, which is the S1 query |
-| `POST /orders` | the write path. It calls `inventory` from Phase 4. |
+| `POST /orders` | the write path. It calls `inventory` from Phase 5. |
 | `GET /orders/{id}` | point lookup |
-| `POST /admin/faults` *(Phase 4)* | toggles the runtime faults for S2 and S3 |
+| `POST /admin/faults` *(Phase 5)* | toggles the runtime faults for S2 and S3 |
 
 | ID | Scenario | Mechanism | What the investigation should reveal | Phase |
 |---|---|---|---|---|
 | **S1** | **Missing index** | `orders.customer_email` ships without an index, so the history query does a sequential scan over about 1M rows. The fix, `make demo-fix`, adds the index with `CREATE INDEX CONCURRENTLY`, which is safe under load. `make demo-reset` drops it again. | p95 rises for the `/orders` route → slow traces are dominated by one `SELECT` span → that span's `db.query.text` shows the predicate → after the fix, the same workload is re-measured. | 1 |
-| **S2** | **Error burst** | `POST /admin/faults {"error_rate": 0.2}` makes 20% of `POST /orders` fail with a logged ERROR that includes the exception. | The error-rate alert fires → error traces → the exception event and the matching ERROR log share a trace ID. | 4 |
-| **S3** | **Slow dependency** | A second service, `inventory`, gets injected latency beyond `demo-service`'s client timeout. | The trace crosses two services through W3C `traceparent` propagation, and the timeout appears as an error span on the client side. | 4 |
+| **S2** | **Error burst** | `POST /admin/faults {"error_rate": 0.2}` makes 20% of `POST /orders` fail with a logged ERROR that includes the exception. | The error-rate alert fires → error traces → the exception event and the matching ERROR log share a trace ID. | 5 |
+| **S3** | **Slow dependency** | A second service, `inventory`, gets injected latency beyond `demo-service`'s client timeout. | The trace crosses two services through W3C `traceparent` propagation, and the timeout appears as an error span on the client side. | 5 |
+| **S4** | **Bad release** | `make demo-deploy V=v2 ERROR_RATE=0.2` recreates `demo-service` with `DEMO_FAULT_ERROR_RATE=0.2`, so 20% of its storage calls fail, and reports the deployment by signed webhook. `make demo-deploy V=v3` is the healthy fix. | DeployRadar marks v2 a `regression` with the before/after counts and their PromQL → the failing traces of the after window → each one's exception event and ERROR log. | 4 |
 
 The load generator is `tests/load/workload.js` (k6). The request mix and arrival rate are defined in the [benchmark method](benchmarks/README.md#reference-workload).
 
@@ -325,6 +349,7 @@ The load generator is `tests/load/workload.js` (k6). The request mix and arrival
 | **Untrusted telemetry content** (XSS, misleading output) | Span attributes and log bodies are attacker-controllable input. React escapes rendered text, and the UI never renders telemetry as HTML (`dangerouslySetInnerHTML` is banned by lint). Long values are truncated in tables. nginx sends a restrictive Content-Security-Policy. |
 | Cross-site request forgery | `SameSite=Strict` session cookie. A state-changing request whose `Origin` names a different origin is rejected with `403 forbidden`; requests without `Origin` come from non-browser clients, which hold no victim's cookie. Request bodies must be `application/json`, which a cross-site HTML form cannot send. |
 | Password guessing | bcrypt hashing and per-IP rate limiting on login. |
+| Forged or replayed deployment webhooks | The webhook route is public but authenticated: `X-Hub-Signature-256` must be the HMAC-SHA256 of the exact body under `INFRASCOPE_GITHUB_WEBHOOK_SECRET` (at least 16 characters), compared in constant time. Nothing is stored before the signature checks out, bodies are capped at 1 MiB, and a replayed delivery ID is answered as a duplicate without being applied. With no secret set, the route refuses everything. |
 | Untrusted telemetry senders | The OTLP ports bind to localhost by default. Exposing them on a network requires turning on the collector's `bearertokenauth` extension (documented in the runbook). |
 | Resource exhaustion through queries | The guard rails in NFR-2: maximum range, maximum page size, query timeouts, and per-dependency client timeouts. |
 | Secrets in telemetry | The demo service uses parameterised SQL, so values never appear in `db.query.text`, and it never logs request bodies. Collector-side redaction is listed as future work. |
@@ -347,8 +372,8 @@ The load generator is `tests/load/workload.js` (k6). The request mix and arrival
 
 | Layer | Covers |
 |---|---|
-| Unit | FR-3 (AC-3.1, AC-3.3), FR-4 (AC-4.1), FR-6 (AC-6.1, AC-6.3), NFR-3 |
-| Integration | FR-2 (AC-2.1), FR-3 (AC-3.4), FR-6 (AC-6.2), NFR-1, NFR-4 |
+| Unit | FR-3 (AC-3.1, AC-3.3), FR-4 (AC-4.1), FR-6 (AC-6.1, AC-6.3), FR-9 (AC-9.1), NFR-3 |
+| Integration | FR-2 (AC-2.1), FR-3 (AC-3.4), FR-6 (AC-6.2), FR-9 (AC-9.2, AC-9.3), NFR-1, NFR-4 |
 | Pipeline | FR-1 |
 | End-to-end | FR-2 (AC-2.3), FR-3, FR-5 (AC-5.1, AC-5.2), NFR-1, NFR-3 |
 | Smoke | FR-7 |
@@ -366,10 +391,11 @@ Phases are ordered by dependency, not by date. A phase is done when its **exit c
 | **1** | Instrumented demo & pipeline | `demo-service` with OTel traces, metrics and logs; pgx instrumentation; seed data; S1; k6 request mix | A pipeline test sees one request as a trace (HTTP and DB spans), correlated logs and RED metrics |
 | **2** | Query API | Migrations; auth; services and metrics, trace search and detail, log search; error envelope; integration tests; schema-drift test | All Phase 2 endpoints pass integration tests against real containers; the OpenAPI contract and handlers agree |
 | **3** | Investigation UI | Login; service overview (ECharts); trace search and waterfall; log explorer; correlation links; URL state; degraded banners | The e2e round trip passes; S1 can be diagnosed from the UI alone |
-| **4** | Failure scenarios, alerting & reliability | Alert rules, evaluator and UI; S2 and S3; `inventory` service; persistent collector queue; read-only ClickHouse user; platform view | The alert fires and resolves (integration test); the ClickHouse outage checklist passes, with the measured data loss within queue capacity documented |
-| **5** | Benchmarked release | Benchmark reports (S1 before and after), screenshots, short demo video, ADR review, limitations, `v1.0.0` | A newcomer can go from clean clone to the S1 diagnosis using the README alone; every number in the README links to a report |
+| **4** | DeployRadar | GitHub `deployment_status` webhook with signature check and idempotent storage; status precedence; before/after comparison engine and worker; deployments API and views; S4 and `make demo-deploy` ([ADR-0007](decisions/0007-deployment-health-comparison.md)) | AC-9.1 to AC-9.3 pass in CI; on the running stack, a deliberate error regression is reported as `regression` with its evidence (AC-9.4) |
+| **5** | Failure scenarios, alerting & reliability | Alert rules, evaluator and UI; S2 and S3; `inventory` service; persistent collector queue; read-only ClickHouse user; platform view | The alert fires and resolves (integration test); the ClickHouse outage checklist passes, with the measured data loss within queue capacity documented |
+| **6** | Benchmarked release | Benchmark reports (S1 before and after), screenshots, short demo video, ADR review, limitations, `v1.0.0` | A newcomer can go from clean clone to the S1 diagnosis using the README alone; every number in the README links to a report |
 
-**Milestones:** the *walking skeleton* is the end of Phase 3 (FR-1 to FR-5, FR-7, FR-8 with S1). *v1.0* is the end of Phase 5, when every FR and NFR has been verified.
+**Milestones:** the *walking skeleton* is the end of Phase 3 (FR-1 to FR-5, FR-7, FR-8 with S1). *v1.0* is the end of Phase 6, when every FR and NFR has been verified.
 
 ---
 
@@ -379,7 +405,7 @@ Phases are ordered by dependency, not by date. A phase is done when its **exit c
 |---|---|---|
 | R1 | Exporter schema changes when the collector is upgraded. | The collector version is pinned. A schema-drift test fails CI when the created DDL changes. ADR-0004 records the exit plan of owning the DDL as migrations. |
 | R2 | Two query backends (Prometheus and ClickHouse) increase API complexity. | Each backend sits behind its own repository interface. Degraded mode is handled per backend. Time ranges are parsed and validated by a single shared function. |
-| R3 | ClickHouse resource use on a laptop. | Memory use is measured in Phase 5 and recommended resources are published from those measurements. The runbook documents server memory settings. |
+| R3 | ClickHouse resource use on a laptop. | Memory use is measured in Phase 6 and recommended resources are published from those measurements. The runbook documents server memory settings. |
 | R4 | OTel → Prometheus name translation differs from expectations. | The translation strategy is set explicitly. An integration test asserts the expected series and label names. |
 | R5 | Scope creep (dashboards, analytics, notifications). | Every FR is tied to a phase. Stretch items are listed separately and wait until v1.0. |
 | R6 | High-cardinality metric labels. | Only allow-listed resource attributes are promoted to labels. High-cardinality data (user IDs, order IDs) belongs on spans and logs in ClickHouse. |
@@ -395,6 +421,7 @@ Phases are ordered by dependency, not by date. A phase is done when its **exit c
 - **Owned ClickHouse schema** with pre-aggregated materialised views for faster overviews.
 - Tail-based sampling; collector-side redaction of sensitive attributes.
 - OIDC login; Alertmanager integration; saved investigations.
+- **DeployRadar:** list the commits a deployment shipped (GitHub's compare API, which needs a token); add failing-trace and error-log counts from ClickHouse as evidence; baselines from the same time on earlier days, for services with daily seasonality ([ADR-0007](decisions/0007-deployment-health-comparison.md)).
 
 ---
 

@@ -24,11 +24,11 @@ var (
 // fixture: checkout serves 10 req/s, 5% of them 5xx; catalog serves 4 req/s
 // and has never returned a 5xx (so it has no 5xx series at all).
 var fixture = []testenv.RequestSeries{
-	{Service: "checkout", Route: "/orders", Method: "GET", Status: 200, Rate: 9.5,
+	{Service: "checkout", Environment: "local", Route: "/orders", Method: "GET", Status: 200, Rate: 9.5,
 		Shares: map[float64]float64{0.05: 0.8, 0.1: 0.15, 0.25: 0.05}},
-	{Service: "checkout", Route: "/orders", Method: "GET", Status: 500, Rate: 0.5,
+	{Service: "checkout", Environment: "local", Route: "/orders", Method: "GET", Status: 500, Rate: 0.5,
 		Shares: map[float64]float64{0.25: 1}},
-	{Service: "catalog", Route: "/products", Method: "GET", Status: 200, Rate: 4,
+	{Service: "catalog", Environment: "local", Route: "/products", Method: "GET", Status: 200, Rate: 4,
 		Shares: map[float64]float64{0.01: 0.5, 0.025: 0.5}},
 }
 

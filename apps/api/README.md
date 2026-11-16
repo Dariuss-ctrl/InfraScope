@@ -12,7 +12,9 @@ InfraScope's query and configuration API: Go standard library `net/http`, JSON o
 | `GET /api/v1/traces` · `GET /api/v1/traces/{traceId}` | session | ClickHouse |
 | `GET /api/v1/logs` | session | ClickHouse |
 | `GET /api/v1/diagnostics/schema` | session | ClickHouse: which tables and skip indexes are missing, and their effect |
-| `/api/v1/alert-rules`, `/api/v1/alerts` | session | `501` until Phase 4 |
+| `POST /api/v1/webhooks/github` | HMAC signature | PostgreSQL: GitHub `deployment_status` deliveries (DeployRadar) |
+| `GET /api/v1/deployments` · `GET /api/v1/deployments/{deploymentId}` | session | PostgreSQL: deployments, status history and comparison evidence |
+| `/api/v1/alert-rules`, `/api/v1/alerts` | session | `501` until Phase 5 |
 
 ## How it is built
 
@@ -21,6 +23,7 @@ InfraScope's query and configuration API: Go standard library `net/http`, JSON o
 - **Degraded, not down.** The API starts and serves with ClickHouse or Prometheus unreachable; only the features that need them fail. `/api/v1/status` also reports `clickhouse_schema`, which goes down when a table or skip index the queries rely on is missing. Being public, it names nothing; `/api/v1/diagnostics/schema` names what is missing and what it slows down or breaks, for a logged-in user.
 - **Keyset pagination.** Cursors encode `(sort value, tie-breaker)`, so rows sharing a timestamp or duration never skip or repeat across pages. Pages hold at most 500 results, and a trace response at most 10,000 spans (`truncated: true` beyond that).
 - **Sessions (ADR-0006).** bcrypt password hashes. Random 256-bit tokens stored only as SHA-256 hashes. An `HttpOnly`, `SameSite=Strict` cookie. A same-origin check on state-changing requests. Per-client login rate limiting (5 attempts, then one more every 12 s).
+- **DeployRadar (ADR-0007).** The webhook is verified by `X-Hub-Signature-256` before anything is stored, every verified delivery is stored before it is processed, and statuses are applied by their own time, so redeliveries and late arrivals change nothing. A worker goroutine claims due comparisons with `FOR UPDATE SKIP LOCKED`, measures both windows in Prometheus, and stores the values with the exact PromQL behind them. The verdict rules are one pure function, `deployradar.Judge`.
 - **Self-observability.** The API exports its own traces, metrics and logs as `infrascope-api`. Its outgoing ClickHouse and Prometheus calls appear as client spans.
 
 ## Layout
@@ -29,10 +32,12 @@ InfraScope's query and configuration API: Go standard library `net/http`, JSON o
 cmd/api/              wiring, graceful shutdown, healthcheck subcommand
 internal/config/      environment configuration and validation
 internal/backend/     the failure kinds every client returns
-internal/postgres/    users, sessions, embedded migrations (advisory-locked)
+internal/postgres/    users, sessions, deployments, embedded migrations (advisory-locked)
 internal/auth/        login, sessions, bootstrap of the admin account, rate limiter
 internal/clickhouse/  trace and log search, trace detail, schema check, cursors
-internal/prometheus/  service summaries and series (PromQL builders)
+internal/prometheus/  service summaries and series, DeployRadar window stats (PromQL builders)
+internal/deployradar/ deployment domain, status precedence, verdict rules, comparison worker
+internal/github/      webhook signature check and deployment_status parsing
 internal/httpapi/     routes, parameter validation, error envelope
 internal/health/      dependency probes and readiness
 internal/otelsetup/   OpenTelemetry SDK setup for the API itself
@@ -54,6 +59,9 @@ internal/testenv/     disposable containers for integration tests (build tag "in
 | `INFRASCOPE_DEPENDENCY_TIMEOUT` | `2s` | health probes and connection attempts |
 | `INFRASCOPE_QUERY_TIMEOUT` | `10s` | longest a single query may run |
 | `INFRASCOPE_MAX_SEARCH_RANGE` | `24h` | widest trace or log search window |
+| `INFRASCOPE_GITHUB_WEBHOOK_SECRET` | — (webhooks off) | shared with the GitHub webhook; at least 16 characters |
+| `INFRASCOPE_DEPLOYRADAR_WINDOW` / `_SETTLE` | `10m` / `2m` | length of each comparison window, and the gap after a deployment before the after window |
+| `INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS` | `200` | requests each window needs before any verdict other than `insufficient_data` |
 
 ## Tests
 

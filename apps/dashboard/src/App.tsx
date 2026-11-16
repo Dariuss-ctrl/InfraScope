@@ -2,6 +2,8 @@ import type { ReactElement } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { Layout } from './components/Layout.tsx'
 import { RequireSession } from './components/RequireSession.tsx'
+import { DeploymentPage } from './pages/DeploymentPage.tsx'
+import { DeploymentsPage } from './pages/DeploymentsPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { LogsPage } from './pages/LogsPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
@@ -17,6 +19,7 @@ const pages: Partial<Record<string, ReactElement>> = {
   services: <ServicesPage />,
   traces: <TracesPage />,
   logs: <LogsPage />,
+  deployments: <DeploymentsPage />,
 }
 
 // Routes are separate from the router so tests can mount them in memory.
@@ -35,6 +38,7 @@ export function AppRoutes() {
             />
           ))}
           <Route path="traces/:traceId" element={<TracePage />} />
+          <Route path="deployments/:deploymentId" element={<DeploymentPage />} />
           <Route path="status" element={<StatusPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

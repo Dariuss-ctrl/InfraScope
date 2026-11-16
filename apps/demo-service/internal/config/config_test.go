@@ -24,6 +24,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		t.Errorf("seed sizes = %d/%d/%d, want 10000/100000/1000000",
 			cfg.SeedProducts, cfg.SeedCustomers, cfg.SeedOrders)
 	}
+	if cfg.ServiceVersion != "" || cfg.FaultErrorRate != 0 {
+		t.Errorf("version %q, fault rate %v; want the built-in version and no faults", cfg.ServiceVersion, cfg.FaultErrorRate)
+	}
 }
 
 func TestLoadReadsOverrides(t *testing.T) {
@@ -32,12 +35,17 @@ func TestLoadReadsOverrides(t *testing.T) {
 		"DEMO_HTTP_ADDR":            ":9000",
 		"DEMO_SLOW_QUERY_THRESHOLD": "250ms",
 		"DEMO_SEED_ORDERS":          "5000",
+		"DEMO_SERVICE_VERSION":      "v2",
+		"DEMO_FAULT_ERROR_RATE":     "0.2",
 	}))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if cfg.HTTPAddr != ":9000" || cfg.SlowQueryThreshold != 250*time.Millisecond || cfg.SeedOrders != 5000 {
 		t.Errorf("overrides not applied: %+v", cfg)
+	}
+	if cfg.ServiceVersion != "v2" || cfg.FaultErrorRate != 0.2 {
+		t.Errorf("version %q, fault rate %v; want v2 and 0.2", cfg.ServiceVersion, cfg.FaultErrorRate)
 	}
 }
 
@@ -52,6 +60,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative threshold", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_SLOW_QUERY_THRESHOLD": "-1s"}},
 		{"zero seed size", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_SEED_PRODUCTS": "0"}},
 		{"non-numeric seed size", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_SEED_ORDERS": "many"}},
+		{"fault rate above 1", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_FAULT_ERROR_RATE": "1.5"}},
+		{"negative fault rate", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_FAULT_ERROR_RATE": "-0.1"}},
+		{"non-numeric fault rate", map[string]string{"DEMO_DATABASE_URL": db, "DEMO_FAULT_ERROR_RATE": "some"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

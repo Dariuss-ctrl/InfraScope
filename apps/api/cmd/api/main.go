@@ -27,6 +27,7 @@ import (
 	"infrascope/api/internal/auth"
 	"infrascope/api/internal/clickhouse"
 	"infrascope/api/internal/config"
+	"infrascope/api/internal/deployradar"
 	"infrascope/api/internal/health"
 	"infrascope/api/internal/httpapi"
 	"infrascope/api/internal/otelsetup"
@@ -128,19 +129,33 @@ func run() error {
 	)
 
 	router := httpapi.NewRouter(httpapi.Deps{
-		Health:    checker,
-		Auth:      authService,
-		Limiter:   auth.NewLimiter(5, 12*time.Second),
-		Telemetry: telemetryStore,
-		Metrics:   metricStore,
-		Logger:    logger,
+		Health:      checker,
+		Auth:        authService,
+		Limiter:     auth.NewLimiter(5, 12*time.Second),
+		Telemetry:   telemetryStore,
+		Metrics:     metricStore,
+		Deployments: db,
+		Logger:      logger,
 		Settings: httpapi.Settings{
 			MaxSearchRange:  cfg.MaxSearchRange,
 			MaxMetricsRange: metricsRetention,
 			MaxSpans:        maxSpansPerTrace,
 			CookieSecure:    cfg.CookieSecure,
+			WebhookSecret:   cfg.GitHubWebhookSecret,
+			DeployWindows:   deployradar.Windows{Width: cfg.DeployRadarWindow, Settle: cfg.DeployRadarSettle},
 		},
 	})
+	if cfg.GitHubWebhookSecret == "" {
+		logger.Info("deployment webhooks off: INFRASCOPE_GITHUB_WEBHOOK_SECRET is not set")
+	}
+	// The comparison engine runs beside the server and stops with it. Its
+	// claims are row locks, so more API instances just share the work.
+	engine := &deployradar.Engine{
+		Store: db, Metrics: metricStore,
+		Thresholds: deployradar.DefaultThresholds(cfg.DeployRadarMinRequests),
+		Logger:     logger,
+	}
+	go engine.Run(ctx)
 	handler := otelhttp.NewHandler(router, "infrascope-api",
 		otelhttp.WithFilter(func(r *http.Request) bool {
 			switch r.URL.Path {

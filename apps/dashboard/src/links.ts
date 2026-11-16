@@ -31,6 +31,36 @@ export function logsPath(filters: LogFilters, range: TimeRange): string {
   return withQuery('/logs', filters, range)
 }
 
+// Filters of the deployments list, named as the API names them.
+export type DeploymentListFilters = { service?: string; environment?: string }
+
+export function deploymentsPath(filters: DeploymentListFilters): string {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) {
+      params.set(key, value)
+    }
+  }
+  const query = params.toString()
+  return query ? `/deployments?${query}` : '/deployments'
+}
+
+export function deploymentPath(id: number | string): string {
+  return `/deployments/${id}`
+}
+
+export function readDeploymentFilters(params: URLSearchParams): DeploymentListFilters {
+  return {
+    service: params.get('service')?.trim() || undefined,
+    environment: params.get('environment')?.trim() || undefined,
+  }
+}
+
+// servicesPath opens the overview over a time range.
+export function servicesPath(range: TimeRange): string {
+  return withQuery('/services', {}, range)
+}
+
 // tracePath opens a trace, optionally with one of its spans selected.
 export function tracePath(traceId: string, spanId?: string | null): string {
   return spanId ? `/traces/${traceId}?span=${spanId}` : `/traces/${traceId}`

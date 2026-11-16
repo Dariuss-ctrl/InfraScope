@@ -61,3 +61,11 @@ const dateTime = new Intl.DateTimeFormat('en-GB', {
 export function formatDateTime(t: Date | string): string {
   return dateTime.format(typeof t === 'string' ? new Date(t) : t)
 }
+
+const timeOfDay = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+
+// formatTimeOfDay shows hours and minutes in the viewer's time zone, for
+// labels where the date is already clear.
+export function formatTimeOfDay(t: Date | string): string {
+  return timeOfDay.format(typeof t === 'string' ? new Date(t) : t)
+}

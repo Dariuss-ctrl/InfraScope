@@ -21,6 +21,7 @@ Operational procedures for a single-node InfraScope deployment. Run every comman
 | End-to-end telemetry test (needs a running stack) | `make test-pipeline` | see [tests/pipeline](../tests/pipeline/README.md) |
 | Browser journeys (needs a running stack) | `make test-e2e` | see [tests/e2e](../tests/e2e/README.md) |
 | Scenario S1: drop / restore the index | `make demo-reset` / `make demo-fix` | `$COMPOSE exec -T postgres psql -U postgres -d shop -c "DROP INDEX CONCURRENTLY IF EXISTS orders_customer_email_idx"` |
+| Scenario S4: deploy a demo release and report it to DeployRadar | `make demo-deploy V=v2 ERROR_RATE=0.2` | `bash scripts/deploy-demo.sh v2 0.2` |
 | Stop, keep data | `make down` | `$COMPOSE down` |
 | Stop and **delete all data** | `make reset` | `$COMPOSE down -v --remove-orphans` |
 
@@ -137,9 +138,52 @@ The error code names the dependency: `storage_unavailable` (ClickHouse), `metric
 
 The API is down or restarting. Check `make logs S=api` and `make ps`. nginx re-resolves the API's address through Docker DNS on every request, so it recovers on its own once the API is back. No nginx restart is needed.
 
+### GitHub shows failed webhook deliveries
+
+GitHub's webhook settings list every delivery with InfraScope's response; the body says what happened.
+
+- **`503 webhooks_disabled`:** `INFRASCOPE_GITHUB_WEBHOOK_SECRET` is empty. Set it ([Deployments](#deployments-deployradar)) and run `$COMPOSE up -d api`.
+- **`401 invalid_signature`:** the secret in GitHub and in `.env` differ, or a proxy changed the body. The API logs `webhook signature rejected` with the delivery ID; nothing is stored.
+- **`400 invalid_argument`:** the payload was not a usable `deployment_status`, for example a SHA that is not hex. The delivery is stored with outcome `failed`, and after fixing the cause, GitHub's **Redeliver** processes it again.
+- **`200` with `"outcome":"duplicate"`:** this delivery ID was processed before. That is the expected answer to a redelivery of a successful delivery.
+
+### A deployment comparison stays pending
+
+A comparison is due when its after window closes (`SETTLE` + `WINDOW` after the success, 12 minutes by default), plus 30 s for the last metric export. Its page says when the window closes.
+
+1. If that time has passed, check `make logs S=api` for `deployradar:` lines. `comparison will be retried` with `prometheus` in the error means Prometheus is unreachable; see [Prometheus is not receiving application metrics](#prometheus-is-not-receiving-application-metrics). The worker tries five times, then marks the comparison `failed` with the last error.
+2. A comparison that failed can be queued again by hand:
+   ```bash
+   $COMPOSE exec -T postgres psql -U postgres -d infrascope -c \
+     "UPDATE deployment_comparisons SET status = 'pending', attempts = 0, error = NULL WHERE deployment_id = <id>"
+   ```
+   It must still be within Prometheus retention (7 days); older windows cannot be measured.
+
+### Every deployment comes back `insufficient_data`
+
+Either the windows had fewer requests than `INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS` (200 by default), or the deployment does not match any metrics. The reasons on the deployment's page say which.
+
+- **"no request series for this service and environment":** the deployment's `service` and `environment` must equal the `service_name` and `deployment_environment_name` labels in Prometheus. Compare them with `curl -s http://localhost:8080/api/v1/services` (after logging in). The service comes from `deployment.payload.service`, falling back to the repository name, so set it when the workflow creates the deployment, for example `payload: '{"service":"checkout"}'`.
+- **"N requests, fewer than the 200 needed":** the service is too quiet for that window. Lengthen `INFRASCOPE_DEPLOYRADAR_WINDOW` rather than lowering the minimum, which only makes the verdicts noisier.
+
 ### PostgreSQL will not start after an upgrade
 
 PostgreSQL 18 images keep data under `/var/lib/postgresql/18/docker`, and the volume is mounted at `/var/lib/postgresql`. Major-version upgrades need `pg_upgrade` or a dump and restore. For a disposable local setup, `make reset` is the fast path, at the cost of losing all data.
+
+## Deployments (DeployRadar)
+
+DeployRadar learns about deployments from GitHub's `deployment_status` webhook ([FR-9](SPEC.md#fr-9-deployradar-deployments-and-their-effect-on-health--phase-4), [ADR-0007](decisions/0007-deployment-health-comparison.md)).
+
+**Set it up:**
+
+1. Generate a secret and put it in `.env` as `INFRASCOPE_GITHUB_WEBHOOK_SECRET` (at least 16 characters): `openssl rand -hex 32`. Run `$COMPOSE up -d api`.
+2. Make the webhook route reachable from GitHub. The dashboard binds to `127.0.0.1` by default, so this needs a reverse proxy with TLS in front of `/api/v1/webhooks/github`, or a tunnel. Expose only that path if you can; the rest of the API needs a session anyway.
+3. In the repository's **Settings → Webhooks**, add a webhook: payload URL `https://<host>/api/v1/webhooks/github`, content type `application/json`, the same secret, and only the **Deployment statuses** event. GitHub sends a `ping` first, which is stored and answered as `ignored`.
+4. Make deployments name their service and environment as the metrics do. In a GitHub Actions workflow that creates deployments, set `environment` to the `deployment_environment_name` of the deployed service and `payload` to `{"service": "<service_name>"}`.
+
+**Rotate the secret:** GitHub signs with one secret at a time, so rotating has a short gap. Change the secret in GitHub, then in `.env`, and run `$COMPOSE up -d api`. Deliveries refused in between fail with `401`; use **Redeliver** in GitHub for those.
+
+**Tune the windows:** `INFRASCOPE_DEPLOYRADAR_WINDOW` (default `10m`) and `_SETTLE` (`2m`) apply to comparisons queued after the API restarts; queued ones keep their windows.
 
 ## Exposing OTLP beyond localhost
 

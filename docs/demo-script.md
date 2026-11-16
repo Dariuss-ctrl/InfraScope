@@ -2,7 +2,7 @@
 
 A ten-minute demonstration of the workflow InfraScope exists for: **from a latency symptom to a verified fix, using only telemetry.** It follows scenario **S1, *missing index*** ([SPEC §9](SPEC.md#9-demo-service-and-fault-scenarios)).
 
-> **Status:** every step works as of **Phase 3**, except the benchmark report in step 7, which comes with Phase 5. Together, the [browser journeys](../tests/e2e/README.md) walk steps 3 to 5 on every CI run.
+> **Status:** every step works as of **Phase 4**, except the benchmark report in step 7, which comes with Phase 6. [Part 2](#part-2-did-that-deployment-do-it) shows DeployRadar catching a bad release. Together, the [browser journeys](../tests/e2e/README.md) walk steps 3 to 5 on every CI run.
 
 ## Setup
 
@@ -70,13 +70,60 @@ Use identical rate and duration, so that the only variable is the index.
 
 ## 7. Compare before and after
 
-**Show:** the overview's p95 for `demo-service` returns to its baseline. Then show the two k6 run summaries written up as a benchmark report *(Phase 5)*. [The benchmark method](benchmarks/README.md) defines what is recorded and how.
+**Show:** the overview's p95 for `demo-service` returns to its baseline. Then show the two k6 run summaries written up as a benchmark report *(Phase 6)*. [The benchmark method](benchmarks/README.md) defines what is recorded and how.
 
 **Point out:** the improvement is stated as a measured before/after pair from the same workload on the same machine, with the report linked. It is not stated as a general claim.
+
+## Part 2: did that deployment do it?
+
+Scenario **S4, *bad release*** ([SPEC §9](SPEC.md#9-demo-service-and-fault-scenarios)): a release in which one storage call in five fails, reported to DeployRadar the way GitHub would report it. About fifteen minutes, most of it waiting for windows to fill.
+
+**Setup:** set `INFRASCOPE_GITHUB_WEBHOOK_SECRET` in `.env` (`openssl rand -hex 32`). For a demo, shorten the windows too: `INFRASCOPE_DEPLOYRADAR_WINDOW=3m` and `INFRASCOPE_DEPLOYRADAR_SETTLE=1m`. Then `make up`. Keep traffic running throughout, in a second terminal:
+
+```bash
+make load RATE=20 DURATION=20m
+```
+
+### 8. Deploy a healthy release
+
+After three minutes of traffic, so the first before window is full:
+
+```bash
+make demo-deploy V=v1
+```
+
+The script reports the deployment in progress, recreates `demo-service` as `v1`, and reports success. On the way it checks that a repeated delivery is answered as a duplicate and that a late `in_progress` does not un-finish the deployment.
+
+**Show:** *Deployments* lists it with *comparing…*. About five minutes later (settle, window, then 30 s for the last metrics) the row says **No change**.
+
+### 9. Ship the bad release
+
+```bash
+make demo-deploy V=v2 ERROR_RATE=0.2
+```
+
+**Show:** five minutes later, the v2 row says **Regression**. Its page leads with the reason in one line, with the before/after table and the confidence below it. In a run on a development laptop it read *error rate 0.0% → 19.8% (+19.8 pp, p<0.001)*; the exact figures vary from run to run, since one request in five fails at random.
+
+**Point out:** every number can be checked. *PromQL behind these numbers* holds the exact query, evaluation time and range for each value, ready to paste into Prometheus. Nothing was copied out of Prometheus except the results.
+
+### 10. Follow the evidence
+
+Click **Failing traces after the deployment**. The trace search opens on `demo-service`, `status=error`, over the after window. Open one: the server span carries the exception, and *Logs for this trace* shows the ERROR record with the same trace ID.
+
+**Point out:** the investigation from part 1 starts from the deployment, with the time window already chosen.
+
+### 11. Roll forward
+
+```bash
+make demo-deploy V=v3
+```
+
+The v3 comparison measures v2 as its before window, so it comes back **Improvement**.
 
 ## Reset
 
 ```bash
 make demo-fix                 # leave the healthy state behind
+make demo-deploy V=v3         # healthy demo-service (or: make up)
 make reset                    # or wipe everything
 ```

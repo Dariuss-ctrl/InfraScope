@@ -55,6 +55,10 @@ demo-fix: ## Scenario S1: add the missing index on orders.customer_email
 demo-reset: ## Scenario S1: drop the index again (the "bad deploy")
 	$(SHOP_PSQL) "DROP INDEX CONCURRENTLY IF EXISTS orders_customer_email_idx"
 
+demo-deploy: .env ## DeployRadar: deploy demo-service V=<version> [ERROR_RATE=0-1] and report it by webhook
+	@test -n "$(V)" || { echo "usage: make demo-deploy V=v2 ERROR_RATE=0.2"; exit 2; }
+	bash scripts/deploy-demo.sh "$(V)" "$(or $(ERROR_RATE),0)"
+
 config-check: .env ## Validate the Compose configuration
 	$(COMPOSE) config --quiet
 

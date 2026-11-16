@@ -4,7 +4,7 @@
 
 InfraScope collects traces, metrics and logs with OpenTelemetry, stores them in ClickHouse and Prometheus, and puts one investigation workflow on top: service health → the trace of a bad request → the logs written during it → the operation that caused it. Signals are linked by trace ID rather than by matching timestamps, so each step is one click.
 
-> **Status: Phase 3 — investigation UI.** The dashboard takes a slow request from the service overview to the span and statement that caused it, and to the logs written during it, and says on every page when part of the platform is down. [Browser journeys](tests/e2e/README.md) walk that investigation against the running stack in CI, beside the [pipeline test](tests/pipeline/README.md) and [integration tests](tests/integration/README.md) against real databases. Alerting comes in Phase 4 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
+> **Status: Phase 4 — DeployRadar.** Every deployment GitHub reports is compared with the service's health before it: error rate and p95 latency in each window, a verdict, and the exact PromQL behind every number, one click from the failing traces. Phases 1–3 built the investigation that follows: from a slow request on the service overview to the span and statement that caused it, and the logs written during it, with every page saying when part of the platform is down. [Browser journeys](tests/e2e/README.md) walk that investigation against the running stack in CI, beside the [pipeline test](tests/pipeline/README.md) and [integration tests](tests/integration/README.md) against real databases. Alerting comes in Phase 5 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
 
 ## The problem
 
@@ -78,7 +78,7 @@ curl -b session.txt 'http://localhost:8080/api/v1/traces?service=demo-service&so
 | Pipeline | OpenTelemetry Collector (contrib 0.164) | batching, retry, memory limits, back-pressure ([ADR-0001](docs/decisions/0001-collector-centric-ingestion.md)) |
 | Traces and logs | ClickHouse 26.8 LTS | columnar scans, compression, TTL by partition ([ADR-0002](docs/decisions/0002-clickhouse-for-traces-and-logs.md)) |
 | Metrics | Prometheus 3.15 (native OTLP) | PromQL for rates and percentiles ([ADR-0003](docs/decisions/0003-prometheus-for-metrics.md)) |
-| Configuration | PostgreSQL 18 | users, sessions, alert rules and state |
+| Configuration | PostgreSQL 18 | users, sessions, deployments and their comparisons, alert rules and state |
 | API | Go 1.27, standard library `net/http` | small, explicit, easy to test ([OpenAPI contract](apps/api/openapi.yaml)) |
 | UI | React 19, TypeScript 7, Vite 8, TanStack Query, ECharts | investigation views; state in the URL |
 | Delivery | Docker Compose, GitHub Actions | one-command self-hosting; CI starts the full stack |
@@ -90,16 +90,17 @@ curl -b session.txt 'http://localhost:8080/api/v1/traces?service=demo-service&so
 - [x] **Phase 1:** instrumented demo service and telemetry pipeline
 - [x] **Phase 2:** query API (services, traces, logs, auth)
 - [x] **Phase 3:** investigation UI (overview, waterfall, logs, correlation)
-- [ ] **Phase 4:** alerting, failure scenarios, reliability hardening
-- [ ] **Phase 5:** benchmarked v1.0 release
+- [x] **Phase 4:** DeployRadar: each deployment's before/after health comparison, with evidence
+- [ ] **Phase 5:** alerting, failure scenarios, reliability hardening
+- [ ] **Phase 6:** benchmarked v1.0 release
 
 ## Results
 
-*Filled in at Phase 5 from measured runs.* Every number here will link to a report produced by the [benchmark method](docs/benchmarks/README.md).
+*Filled in at Phase 6 from measured runs.* Every number here will link to a report produced by the [benchmark method](docs/benchmarks/README.md).
 
 ## Limitations (by design)
 
-Single node, no high availability, one admin user, no multi-tenancy. Data expires by TTL, with no long-term storage. It is not a replacement for Grafana, Jaeger or a commercial APM. See [non-goals](docs/SPEC.md#22-non-goals).
+Single node, no high availability, one admin user, no multi-tenancy. Data expires by TTL, with no long-term storage. DeployRadar compares one window on each side of a deployment, so a change in traffic between them can look like an effect of the deployment, and a quiet service gets `insufficient_data` rather than a verdict ([ADR-0007](docs/decisions/0007-deployment-health-comparison.md)). It is not a replacement for Grafana, Jaeger or a commercial APM. See [non-goals](docs/SPEC.md#22-non-goals).
 
 ## Repository layout
 

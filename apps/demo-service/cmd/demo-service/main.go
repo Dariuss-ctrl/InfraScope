@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -51,7 +52,11 @@ func run() error {
 		return err
 	}
 
-	shutdownTelemetry, err := telemetry.Setup(ctx, "demo-service", serviceVersion)
+	version := serviceVersion
+	if cfg.ServiceVersion != "" {
+		version = cfg.ServiceVersion
+	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, "demo-service", version)
 	if err != nil {
 		return err
 	}
@@ -91,9 +96,16 @@ func run() error {
 			"products", cfg.SeedProducts, "orders", cfg.SeedOrders, "duration", time.Since(seedStart))
 	}
 
+	// The deliberate bad release: a share of storage calls fail, so DeployRadar
+	// has a real error-rate regression to find (docs/demo-script.md).
+	repo := shop.WithFaults(store, cfg.FaultErrorRate, rand.Float64)
+	if cfg.FaultErrorRate > 0 {
+		logger.Warn("fault injection on", "error_rate", cfg.FaultErrorRate, "service.version", version)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           shop.Instrument(shop.NewHandler(store, logger)),
+		Handler:           shop.Instrument(shop.NewHandler(repo, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

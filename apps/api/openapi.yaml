@@ -18,7 +18,8 @@ info:
     - Errors use one envelope: `{"error": {"code", "message", "fields"}}`.
       Validation errors list every invalid parameter in `fields`; unknown and
       repeated query parameters are rejected.
-    - Every route except health, status and login needs the session cookie.
+    - Every route except health, status, login and the GitHub webhook needs
+      the session cookie. The webhook is authenticated by its HMAC signature.
       A PostgreSQL outage is reported as `503 database_unavailable`, never as
       `401`, so it does not log anyone out.
 
@@ -40,6 +41,11 @@ tags:
     description: Structured log search, correlated with traces by trace ID.
   - name: diagnostics
     description: The detail behind a degraded status check, for logged-in users.
+  - name: deployments
+    description: >-
+      DeployRadar: deployments reported by GitHub webhooks, and the before/after
+      comparison of error rate and p95 latency made for each successful one
+      (ADR-0007).
   - name: alerting
     description: Threshold rules and their state history (ADR-0005).
 security:
@@ -320,12 +326,126 @@ paths:
         "503": { $ref: "#/components/responses/StorageUnavailable" }
         "504": { $ref: "#/components/responses/QueryTimeout" }
 
+  /api/v1/webhooks/github:
+    post:
+      tags: [deployments]
+      summary: Receive a GitHub webhook.
+      operationId: githubWebhook
+      x-phase: 4
+      security: []
+      description: |
+        Public, authenticated by `X-Hub-Signature-256` (HMAC-SHA256 of the raw
+        body with `INFRASCOPE_GITHUB_WEBHOOK_SECRET`) instead of a session. A
+        wrong signature is refused and not stored.
+
+        Every verified delivery is stored before it is processed, so a repeated
+        `X-GitHub-Delivery` is answered as `duplicate` and not applied again,
+        unless its earlier attempt failed (GitHub's redeliver). `deployment_status`
+        events become deployment records; a late non-terminal status never
+        overwrites a finished deployment. Other events are stored and ignored.
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string, maxLength: 64 }
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          description: "`sha256=` followed by the hex HMAC of the body."
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: GitHub's event payload, at most 1 MiB.
+      responses:
+        "200":
+          description: The delivery was stored; `outcome` says what was done with it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookReceipt" }
+        "400": { $ref: "#/components/responses/InvalidArgument" }
+        "401": { $ref: "#/components/responses/InvalidSignature" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "503": { $ref: "#/components/responses/WebhookUnavailable" }
+
+  /api/v1/deployments:
+    get:
+      tags: [deployments]
+      summary: List deployments, newest first (FR-9).
+      operationId: listDeployments
+      x-phase: 4
+      description: >-
+        Each deployment carries its comparison's status, verdict and
+        confidence, so a list can show verdicts without fetching each detail.
+      parameters:
+        - name: service
+          in: query
+          description: The `service_name` label value, matched exactly.
+          schema: { type: string, maxLength: 128 }
+        - name: environment
+          in: query
+          description: The `deployment_environment_name` label value, matched exactly.
+          schema: { type: string, maxLength: 128 }
+        - name: from
+          in: query
+          description: Only deployments created at or after this time.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Only deployments created before this time.
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Deployments, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentList" }
+        "400": { $ref: "#/components/responses/InvalidArgument" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/DatabaseUnavailable" }
+
+  /api/v1/deployments/{deploymentId}:
+    get:
+      tags: [deployments]
+      summary: One deployment with its status history and comparison (FR-9).
+      operationId: getDeployment
+      x-phase: 4
+      description: >-
+        The comparison's result is the evidence behind the verdict: the request
+        and error counts and p95 of each window, and the exact PromQL, evaluation
+        time and range behind every value, so each can be reproduced in
+        Prometheus.
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: The deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentDetail" }
+        "400": { $ref: "#/components/responses/InvalidArgument" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DatabaseUnavailable" }
+
   /api/v1/alert-rules:
     get:
       tags: [alerting]
       summary: List alert rules with their current state (FR-6).
       operationId: listAlertRules
-      x-phase: 4
+      x-phase: 5
       responses:
         "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
@@ -344,7 +464,7 @@ paths:
       tags: [alerting]
       summary: Create an alert rule.
       operationId: createAlertRule
-      x-phase: 4
+      x-phase: 5
       requestBody:
         required: true
         content:
@@ -367,7 +487,7 @@ paths:
       tags: [alerting]
       summary: Get one alert rule.
       operationId: getAlertRule
-      x-phase: 4
+      x-phase: 5
       responses:
         "501": { $ref: "#/components/responses/NotImplemented" }
         "200":
@@ -381,7 +501,7 @@ paths:
       tags: [alerting]
       summary: Replace an alert rule. Editing resets its state to `ok`.
       operationId: updateAlertRule
-      x-phase: 4
+      x-phase: 5
       requestBody:
         required: true
         content:
@@ -401,7 +521,7 @@ paths:
       tags: [alerting]
       summary: Delete an alert rule and its history.
       operationId: deleteAlertRule
-      x-phase: 4
+      x-phase: 5
       responses:
         "501": { $ref: "#/components/responses/NotImplemented" }
         "204": { description: Deleted. }
@@ -413,7 +533,7 @@ paths:
       tags: [alerting]
       summary: Alert state transitions (FR-6).
       operationId: listAlerts
-      x-phase: 4
+      x-phase: 5
       parameters:
         - name: state
           in: query
@@ -547,8 +667,191 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    InvalidSignature:
+      description: The webhook signature does not match the body (`invalid_signature`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PayloadTooLarge:
+      description: The body is over 1 MiB (`payload_too_large`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    WebhookUnavailable:
+      description: >-
+        Webhooks are off because no secret is configured (`webhooks_disabled`),
+        or PostgreSQL is unreachable (`database_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    DeploymentState:
+      type: string
+      enum: [pending, queued, in_progress, success, failure, error, inactive]
+      description: >-
+        GitHub's deployment states. `success`, `failure` and `error` are
+        terminal; `inactive` means a newer deployment superseded this one.
+    Verdict:
+      type: string
+      enum: [regression, improvement, no_change, insufficient_data]
+    Deployment:
+      type: object
+      required: [id, provider, repository, provider_deployment_id, service, environment, ref, sha,
+                 creator, description, created_at, state, state_at, finished_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        provider: { type: string, enum: [github] }
+        repository: { type: string, description: "`owner/name`." }
+        provider_deployment_id: { type: string }
+        service: { type: string, description: The `service_name` label value the comparison measures. }
+        environment: { type: string, description: The `deployment_environment_name` label value. }
+        ref: { type: string }
+        sha: { type: string }
+        creator: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        state: { $ref: "#/components/schemas/DeploymentState" }
+        state_at:
+          type: string
+          format: date-time
+          description: When the current state happened at the provider, not when its webhook arrived.
+        finished_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the first terminal state happened; null while the deployment runs.
+        updated_at: { type: string, format: date-time }
+    DeploymentSummary:
+      allOf:
+        - $ref: "#/components/schemas/Deployment"
+        - type: object
+          required: [comparison_status, verdict, confidence]
+          properties:
+            comparison_status:
+              type: [string, "null"]
+              enum: [pending, done, failed, null]
+              description: Null when no comparison was queued, because the deployment never succeeded.
+            verdict:
+              type: [string, "null"]
+              enum: [regression, improvement, no_change, insufficient_data, null]
+              description: Set once the comparison is done.
+            confidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+    DeploymentList:
+      type: object
+      required: [deployments, next_cursor]
+      properties:
+        deployments:
+          type: array
+          items: { $ref: "#/components/schemas/DeploymentSummary" }
+        next_cursor: { type: [string, "null"] }
+    DeploymentDetail:
+      allOf:
+        - $ref: "#/components/schemas/Deployment"
+        - type: object
+          required: [changes, comparison]
+          properties:
+            changes:
+              type: array
+              description: Every status delivered, in status-time order, including ones the precedence rule did not apply.
+              items: { $ref: "#/components/schemas/DeploymentChange" }
+            comparison:
+              oneOf:
+                - $ref: "#/components/schemas/Comparison"
+                - type: "null"
+    DeploymentChange:
+      type: object
+      required: [delivery_id, state, state_at, applied, recorded_at]
+      properties:
+        delivery_id: { type: string }
+        state: { $ref: "#/components/schemas/DeploymentState" }
+        state_at: { type: string, format: date-time }
+        applied:
+          type: boolean
+          description: False when the status arrived after a later one, or after a terminal one, and was only recorded.
+        recorded_at: { type: string, format: date-time }
+    TimeWindow:
+      type: object
+      required: [from, to]
+      description: A half-open range [from, to).
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+    Comparison:
+      type: object
+      required: [status, attempts, before, after, error, result]
+      properties:
+        status:
+          type: string
+          enum: [pending, done, failed]
+          description: >-
+            `pending` until the after window has closed and been measured, and
+            while Prometheus is unavailable; `failed` after repeated errors.
+        attempts: { type: integer, minimum: 0 }
+        before: { $ref: "#/components/schemas/TimeWindow" }
+        after: { $ref: "#/components/schemas/TimeWindow" }
+        error: { type: [string, "null"], description: "The last failure, while retrying or after giving up." }
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/ComparisonResult"
+            - type: "null"
+    WindowMeasurement:
+      type: object
+      required: [requests, errors, error_rate, p95_seconds]
+      properties:
+        requests: { type: number, minimum: 0, description: "Requests in the window; increase() extrapolates, so it may be fractional." }
+        errors: { type: number, minimum: 0, description: Responses with a 5xx status. }
+        error_rate: { type: number, minimum: 0, maximum: 1, description: "`errors / requests`, or 0 without requests." }
+        p95_seconds: { type: [number, "null"], description: "p95 latency of non-5xx responses; null when the window had no latency histogram." }
+    PromQuery:
+      type: object
+      required: [promql, time, range]
+      properties:
+        promql: { type: string, description: The exact query sent to Prometheus. }
+        time: { type: string, format: date-time, description: Evaluation time of the instant query. }
+        range: { type: string, description: "The range selector, for example `180s`." }
+    ComparisonResult:
+      type: object
+      required: [verdict, error_rate_verdict, p95_verdict, confidence, reasons, before, after,
+                 queries, method_version, computed_at]
+      properties:
+        verdict: { $ref: "#/components/schemas/Verdict" }
+        error_rate_verdict: { $ref: "#/components/schemas/Verdict" }
+        p95_verdict: { $ref: "#/components/schemas/Verdict" }
+        confidence: { type: number, minimum: 0, maximum: 1, description: See ADR-0007 for what it means per signal. }
+        reasons:
+          type: array
+          items: { type: string }
+          description: Readable findings, for example "error rate 0.4% → 9.8% (+9.4 pp, p<0.001)".
+        before: { $ref: "#/components/schemas/WindowMeasurement" }
+        after: { $ref: "#/components/schemas/WindowMeasurement" }
+        queries:
+          type: object
+          description: Keyed by what each measured, for example `after_errors`.
+          additionalProperties: { $ref: "#/components/schemas/PromQuery" }
+        method_version: { type: integer, description: The version of the comparison rules that produced this result. }
+        computed_at: { type: string, format: date-time }
+    WebhookReceipt:
+      type: object
+      required: [delivery_id, event, outcome]
+      properties:
+        delivery_id: { type: string }
+        event: { type: string }
+        outcome:
+          type: string
+          enum: [recorded, ignored, duplicate]
+          description: >-
+            `recorded`: a deployment status was stored. `ignored`: an event
+            DeployRadar does not use. `duplicate`: this delivery ID was
+            processed before.
+        deployment_id: { type: integer, format: int64 }
+        applied:
+          type: boolean
+          description: >-
+            Whether the status changed the deployment's state. False for a
+            status that arrived after a later one, or after a terminal one.
+        comparison_queued:
+          type: boolean
+          description: True when this status made the deployment successful for the first time.
     Error:
       type: object
       required: [error]
@@ -570,6 +873,9 @@ components:
                 - metrics_unavailable
                 - database_unavailable
                 - query_timeout
+                - invalid_signature
+                - payload_too_large
+                - webhooks_disabled
                 - internal
             message: { type: string }
             fields:

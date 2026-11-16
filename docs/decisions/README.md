@@ -10,5 +10,6 @@ Each significant decision is recorded as a short ADR: the context, the decision,
 | [0004](0004-exporter-managed-clickhouse-schema.md) | Let the ClickHouse exporter own the telemetry schema for the MVP | Accepted |
 | [0005](0005-alert-evaluation-in-the-api.md) | Evaluate alert rules inside the API | Accepted |
 | [0006](0006-single-admin-session-auth.md) | Single admin account with server-side sessions for the MVP | Accepted |
+| [0007](0007-deployment-health-comparison.md) | Judge each deployment by a before/after comparison in Prometheus | Accepted |
 
 To add a decision, copy [0000-template.md](0000-template.md), take the next number, and link it here.

@@ -198,13 +198,19 @@ var bucketBounds = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.
 // fixture: a constant request rate whose latencies fall into fixed buckets.
 type RequestSeries struct {
 	Service string
-	Route   string
-	Method  string
-	Status  int
-	Rate    float64 // requests per second
+	// Environment sets deployment_environment_name when not empty.
+	Environment string
+	Route       string
+	Method      string
+	Status      int
+	Rate        float64 // requests per second
 	// Shares maps a bucket's upper bound (one of bucketBounds) to the share
 	// of requests that fall into it; shares sum to 1.
 	Shares map[float64]float64
+	// Start and End, when set, replace the exposition's span for this
+	// series: its counters begin at zero at Start, like a freshly started
+	// process, and stop at End.
+	Start, End time.Time
 }
 
 // HistogramOpenMetrics renders the http.server.request.duration histogram
@@ -217,8 +223,18 @@ func HistogramOpenMetrics(series []RequestSeries, start, end time.Time, step tim
 	for _, s := range series {
 		labels := fmt.Sprintf(`service_name=%q,http_route=%q,http_request_method=%q,http_response_status_code="%d"`,
 			s.Service, s.Route, s.Method, s.Status)
-		for t := start; !t.After(end); t = t.Add(step) {
-			total := math.Round(s.Rate * t.Sub(start).Seconds())
+		if s.Environment != "" {
+			labels += fmt.Sprintf(`,deployment_environment_name=%q`, s.Environment)
+		}
+		from, to := start, end
+		if !s.Start.IsZero() {
+			from = s.Start
+		}
+		if !s.End.IsZero() {
+			to = s.End
+		}
+		for t := from; !t.After(to); t = t.Add(step) {
+			total := math.Round(s.Rate * t.Sub(from).Seconds())
 			ts := fmt.Sprintf("%.3f", float64(t.UnixMilli())/1000)
 			cumulative, sum := 0.0, 0.0
 			for _, le := range bucketBounds {

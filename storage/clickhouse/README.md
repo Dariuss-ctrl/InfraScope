@@ -24,4 +24,4 @@ Files in `config.d/` are mounted into `/etc/clickhouse-server/config.d/`:
 
 - `prometheus.xml` exposes the server's metrics on `:9363/metrics`, which Prometheus scrapes.
 
-A read-only user for the API arrives in Phase 4 (`users.d/`).
+A read-only user for the API arrives in Phase 5 (`users.d/`).

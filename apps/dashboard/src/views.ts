@@ -33,11 +33,19 @@ export const views: readonly View[] = [
     phase: 3,
   },
   {
+    path: 'deployments',
+    title: 'Deployments',
+    summary:
+      'Every deployment GitHub reports, with its error rate and p95 latency before and after, a verdict, and the queries behind it.',
+    requirement: 'FR-9',
+    phase: 4,
+  },
+  {
     path: 'alerts',
     title: 'Alerts',
     summary:
       'Threshold rules on error rate, latency and throughput, with the history of every state change.',
     requirement: 'FR-6',
-    phase: 4,
+    phase: 5,
   },
 ]

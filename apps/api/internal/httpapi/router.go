@@ -11,6 +11,7 @@ import (
 
 	"infrascope/api/internal/auth"
 	"infrascope/api/internal/clickhouse"
+	"infrascope/api/internal/deployradar"
 	"infrascope/api/internal/health"
 	"infrascope/api/internal/prometheus"
 )
@@ -43,42 +44,51 @@ type Settings struct {
 	MaxMetricsRange time.Duration // longest metrics window (Prometheus retention)
 	MaxSpans        int           // spans returned per trace before truncating
 	CookieSecure    bool          // mark the session cookie Secure (HTTPS only)
+
+	// WebhookSecret authenticates GitHub deployment webhooks (FR-9). Empty
+	// turns the webhook route off.
+	WebhookSecret string
+	// DeployWindows places the before/after comparison around a deployment.
+	DeployWindows deployradar.Windows
 }
 
 // Deps are everything the router needs.
 type Deps struct {
-	Health    *health.Checker
-	Auth      Authenticator
-	Limiter   *auth.Limiter
-	Telemetry TelemetryStore
-	Metrics   MetricStore
-	Logger    *slog.Logger
-	Settings  Settings
-	Now       func() time.Time // defaults to time.Now
+	Health      *health.Checker
+	Auth        Authenticator
+	Limiter     *auth.Limiter
+	Telemetry   TelemetryStore
+	Metrics     MetricStore
+	Deployments deployradar.Store // nil turns DeployRadar's routes off
+	Logger      *slog.Logger
+	Settings    Settings
+	Now         func() time.Time // defaults to time.Now
 }
 
 type api struct {
-	health    *health.Checker
-	auth      Authenticator
-	limiter   *auth.Limiter
-	telemetry TelemetryStore
-	metrics   MetricStore
-	logger    *slog.Logger
-	settings  Settings
-	now       func() time.Time
+	health      *health.Checker
+	auth        Authenticator
+	limiter     *auth.Limiter
+	telemetry   TelemetryStore
+	metrics     MetricStore
+	deployments deployradar.Store
+	logger      *slog.Logger
+	settings    Settings
+	now         func() time.Time
 }
 
 // NewRouter returns the API's HTTP handler.
 func NewRouter(d Deps) http.Handler {
 	a := &api{
-		health:    d.Health,
-		auth:      d.Auth,
-		limiter:   d.Limiter,
-		telemetry: d.Telemetry,
-		metrics:   d.Metrics,
-		logger:    d.Logger,
-		settings:  d.Settings,
-		now:       d.Now,
+		health:      d.Health,
+		auth:        d.Auth,
+		limiter:     d.Limiter,
+		telemetry:   d.Telemetry,
+		metrics:     d.Metrics,
+		deployments: d.Deployments,
+		logger:      d.Logger,
+		settings:    d.Settings,
+		now:         d.Now,
 	}
 	if a.now == nil {
 		a.now = time.Now
@@ -91,6 +101,8 @@ func NewRouter(d Deps) http.Handler {
 	mux.HandleFunc("GET /readyz", a.readiness)
 	mux.HandleFunc("GET /api/v1/status", a.status)
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
+	// Public too, but authenticated by its HMAC signature (FR-9).
+	mux.HandleFunc("POST /api/v1/webhooks/github", a.githubWebhook)
 
 	// Everything else needs a session.
 	mux.Handle("POST /api/v1/auth/logout", a.session(a.logout))
@@ -101,7 +113,11 @@ func NewRouter(d Deps) http.Handler {
 	mux.Handle("GET /api/v1/traces/{traceId}", a.session(a.getTrace))
 	mux.Handle("GET /api/v1/logs", a.session(a.searchLogs))
 	mux.Handle("GET /api/v1/diagnostics/schema", a.session(a.schemaDiagnostics))
-	// Alerting arrives in Phase 4.
+	if a.deployments != nil {
+		mux.Handle("GET /api/v1/deployments", a.session(a.listDeployments))
+		mux.Handle("GET /api/v1/deployments/{deploymentId}", a.session(a.getDeployment))
+	}
+	// Alerting arrives in Phase 5.
 	mux.Handle("/api/v1/alert-rules", a.session(notImplemented))
 	mux.Handle("/api/v1/alert-rules/", a.session(notImplemented))
 	mux.Handle("/api/v1/alerts", a.session(notImplemented))

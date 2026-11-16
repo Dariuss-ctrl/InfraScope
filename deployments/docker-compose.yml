@@ -105,6 +105,11 @@ services:
       INFRASCOPE_ADMIN_PASSWORD: ${INFRASCOPE_ADMIN_PASSWORD:?set INFRASCOPE_ADMIN_PASSWORD in .env}
       # Set to true when the dashboard is served over HTTPS.
       INFRASCOPE_COOKIE_SECURE: ${INFRASCOPE_COOKIE_SECURE:-false}
+      # DeployRadar (FR-9). The webhook route stays off while the secret is empty.
+      INFRASCOPE_GITHUB_WEBHOOK_SECRET: ${INFRASCOPE_GITHUB_WEBHOOK_SECRET:-}
+      INFRASCOPE_DEPLOYRADAR_WINDOW: ${INFRASCOPE_DEPLOYRADAR_WINDOW:-10m}
+      INFRASCOPE_DEPLOYRADAR_SETTLE: ${INFRASCOPE_DEPLOYRADAR_SETTLE:-2m}
+      INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS: ${INFRASCOPE_DEPLOYRADAR_MIN_REQUESTS:-200}
       OTEL_SERVICE_NAME: infrascope-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
@@ -131,6 +136,10 @@ services:
       DEMO_SEED_PRODUCTS: ${DEMO_SEED_PRODUCTS:-10000}
       DEMO_SEED_CUSTOMERS: ${DEMO_SEED_CUSTOMERS:-100000}
       DEMO_SEED_ORDERS: ${DEMO_SEED_ORDERS:-1000000}
+      # Set by scripts/deploy-demo.sh: which release is running, and the bad
+      # release's share of failing requests (0 = healthy).
+      DEMO_SERVICE_VERSION: ${DEMO_SERVICE_VERSION:-}
+      DEMO_FAULT_ERROR_RATE: ${DEMO_FAULT_ERROR_RATE:-0}
       OTEL_SERVICE_NAME: demo-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf

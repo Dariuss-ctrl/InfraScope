@@ -112,6 +112,9 @@ jobs:
       # With the smaller seed the S1 query is fast, so a low threshold makes
       # sure its slow-query warning exists for the investigation journey.
       DEMO_SLOW_QUERY_THRESHOLD: 1ms
+      # Turns the DeployRadar webhook on for this disposable stack. A test
+      # value, not a credential: nothing outside the job can reach the stack.
+      INFRASCOPE_GITHUB_WEBHOOK_SECRET: ci-only-webhook-secret-for-disposable-stack
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -143,6 +146,8 @@ jobs:
           npx playwright install --with-deps chromium
           set -a; . ../../.env; set +a
           npx playwright test
+      - name: DeployRadar deploy script (redeploys demo-service; duplicate and late deliveries)
+        run: bash scripts/deploy-demo.sh ci-v1
       - name: Keep the Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

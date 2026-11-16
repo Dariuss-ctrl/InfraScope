@@ -107,30 +107,33 @@ func (f *fakeMetrics) ServiceExists(context.Context, string, time.Time, time.Dur
 }
 
 type fixture struct {
-	auth      *fakeAuth
-	telemetry *fakeTelemetry
-	metrics   *fakeMetrics
-	limiter   *auth.Limiter
-	handler   http.Handler
+	auth        *fakeAuth
+	telemetry   *fakeTelemetry
+	metrics     *fakeMetrics
+	deployments *fakeDeployments
+	limiter     *auth.Limiter
+	handler     http.Handler
 }
 
 func newFixture() *fixture {
 	f := &fixture{
-		auth:      &fakeAuth{},
-		telemetry: &fakeTelemetry{},
-		metrics:   &fakeMetrics{exists: true},
-		limiter:   auth.NewLimiter(3, time.Minute),
+		auth:        &fakeAuth{},
+		telemetry:   &fakeTelemetry{},
+		metrics:     &fakeMetrics{exists: true},
+		deployments: newFakeDeployments(),
+		limiter:     auth.NewLimiter(3, time.Minute),
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f.handler = NewRouter(Deps{
-		Health:    health.NewChecker(time.Second, logger),
-		Auth:      f.auth,
-		Limiter:   f.limiter,
-		Telemetry: f.telemetry,
-		Metrics:   f.metrics,
-		Logger:    logger,
-		Settings:  Settings{MaxSearchRange: 24 * time.Hour, MaxMetricsRange: 7 * 24 * time.Hour, MaxSpans: 100},
-		Now:       func() time.Time { return now },
+		Health:      health.NewChecker(time.Second, logger),
+		Auth:        f.auth,
+		Limiter:     f.limiter,
+		Telemetry:   f.telemetry,
+		Metrics:     f.metrics,
+		Deployments: f.deployments,
+		Logger:      logger,
+		Settings:    Settings{MaxSearchRange: 24 * time.Hour, MaxMetricsRange: 7 * 24 * time.Hour, MaxSpans: 100},
+		Now:         func() time.Time { return now },
 	})
 	return f
 }
@@ -184,6 +187,8 @@ func TestEveryProtectedRouteNeedsASession(t *testing.T) {
 		{"GET", "/api/v1/traces/0123456789abcdef0123456789abcdef"},
 		{"GET", "/api/v1/logs"},
 		{"GET", "/api/v1/diagnostics/schema"},
+		{"GET", "/api/v1/deployments"},
+		{"GET", "/api/v1/deployments/1"},
 		{"GET", "/api/v1/alert-rules"},
 		{"GET", "/api/v1/alerts"},
 		{"GET", "/api/v1/no-such-route"},

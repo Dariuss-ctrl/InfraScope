@@ -8,6 +8,7 @@
 | [`overview.spec.ts`](specs/overview.spec.ts) | The overview shows real request rates and charts, and a click on the latency chart opens that service's slowest traces for that moment. | FR-2, AC-2.3 |
 | [`traces.spec.ts`](specs/traces.spec.ts) | A request found through the trace explorer opens as a waterfall, which points at the slow query and shows its statement. | FR-3 |
 | [`workflow.spec.ts`](specs/workflow.spec.ts) | The whole investigation for scenario S1, without typing an ID: overview → slowest traces → the span that took the time and its statement → the slow-query warning it logged → the log explorer → back to the same span → back to the overview. | FR-5, AC-5.2 |
+| [`deployments.spec.ts`](specs/deployments.spec.ts) | A deployment reported by signed webhooks appears in the Deployments view with its comparison pending and its full status history, including a late status that was only recorded. A delivery signed with the wrong secret is refused. Skipped unless `INFRASCOPE_GITHUB_WEBHOOK_SECRET` is set for the stack and the journeys. | FR-9 |
 | [`degraded.disruptive.ts`](specs/degraded.disruptive.ts) | A dropped ClickHouse index is named on the status page with its effect, and the runbook's fix restores it. With ClickHouse stopped, every page says so and the overview keeps working. | NFR-1 |
 
 A setup step logs in once and saves the session for the other journeys (in the git-ignored `.auth/`), so a run stays inside the login rate limit.

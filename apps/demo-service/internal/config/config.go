@@ -23,6 +23,13 @@ type Config struct {
 	SeedProducts  int
 	SeedCustomers int
 	SeedOrders    int
+
+	// ServiceVersion overrides the built-in service.version when set, so a
+	// demo deployment can say which release it is (scripts/deploy-demo.sh).
+	ServiceVersion string
+	// FaultErrorRate is the share of requests, 0 to 1, whose storage call
+	// fails on purpose: the "bad release" DeployRadar should catch.
+	FaultErrorRate float64
 }
 
 // Load reads the configuration from the process environment.
@@ -54,6 +61,17 @@ func load(getenv func(string) string) (Config, error) {
 	}
 	if cfg.SeedOrders, err = positiveInt(getenv, "DEMO_SEED_ORDERS", 1_000_000); err != nil {
 		return Config{}, err
+	}
+	cfg.ServiceVersion = getenv("DEMO_SERVICE_VERSION")
+	if len(cfg.ServiceVersion) > 64 {
+		return Config{}, errors.New("DEMO_SERVICE_VERSION must be at most 64 characters")
+	}
+	if raw := getenv("DEMO_FAULT_ERROR_RATE"); raw != "" {
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || rate < 0 || rate > 1 {
+			return Config{}, fmt.Errorf("DEMO_FAULT_ERROR_RATE: want a number from 0 to 1, got %q", raw)
+		}
+		cfg.FaultErrorRate = rate
 	}
 	return cfg, nil
 }

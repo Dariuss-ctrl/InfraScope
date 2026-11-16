@@ -1,5 +1,5 @@
-// Package postgres stores InfraScope's own state in PostgreSQL: users and
-// sessions now, alert rules from Phase 4.
+// Package postgres stores InfraScope's own state in PostgreSQL: users,
+// sessions and DeployRadar's deployments now, alert rules from Phase 5.
 package postgres
 
 import (

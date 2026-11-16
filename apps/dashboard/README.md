@@ -12,7 +12,9 @@ InfraScope's investigation UI: React 19, TypeScript 7 and Vite 8, linted with ox
 | `/traces/:traceId` | The waterfall, nested by parent span, naming the span that spent the most time and the first failure. Span details show the statement, events and attributes, and the logs written during the trace are listed below. `?span=` selects a span. | FR-3, FR-5 |
 | `/logs` | Log search by service, minimum severity, text, trace and span. Each record links to the span that wrote it. | FR-4, FR-5 |
 | `/status` | Every dependency and what breaks while it is down, and any missing ClickHouse table or index with its effect. | NFR-1 |
-| `/alerts` | Says that alerting comes in Phase 4. | FR-6 |
+| `/deployments` | Deployments reported by GitHub, newest first, with their state and the verdict of their before/after comparison. Pending comparisons refresh themselves. | FR-9 |
+| `/deployments/:deploymentId` | One deployment: the verdict and its reasons, the before/after table, the PromQL behind every number, links to the failing traces and error logs of the after window, and the status history, including statuses that arrived too late to apply. | FR-9 |
+| `/alerts` | Says that alerting comes in Phase 5. | FR-6 |
 
 Every page except `/login` needs a session. A banner under the header names whatever is down and what still works.
 
