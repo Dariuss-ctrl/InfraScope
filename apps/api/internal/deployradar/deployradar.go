@@ -320,9 +320,11 @@ type Result struct {
 	Confidence float64  `json:"confidence"`
 	Reasons    []string `json:"reasons"`
 	// Queries is keyed by what each measured: before_requests, after_p95, ...
-	Queries       map[string]Query `json:"queries"`
-	MethodVersion int              `json:"method_version"`
-	ComputedAt    time.Time        `json:"computed_at"`
+	Queries map[string]Query `json:"queries"`
+	// Routes is the per-route evidence, worst change first (RouteChanges).
+	Routes        []RouteStats `json:"routes"`
+	MethodVersion int          `json:"method_version"`
+	ComputedAt    time.Time    `json:"computed_at"`
 }
 
 // Validate checks a result before it is stored.
@@ -448,6 +450,17 @@ type DeploymentDetail struct {
 	Deployment
 	Changes    []Change    `json:"changes"`
 	Comparison *Comparison `json:"comparison"`
+}
+
+// RouteStats is one http_route's requests and 5xx responses in both
+// windows of a comparison. Counts are doubles, like the totals, because
+// increase() extrapolates.
+type RouteStats struct {
+	Route          string  `json:"route"` // empty for requests no route matched
+	BeforeRequests float64 `json:"before_requests"`
+	BeforeErrors   float64 `json:"before_errors"`
+	AfterRequests  float64 `json:"after_requests"`
+	AfterErrors    float64 `json:"after_errors"`
 }
 
 // Success is when a deployment first succeeded.

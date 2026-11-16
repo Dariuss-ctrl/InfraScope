@@ -120,9 +120,15 @@ func TestTickComputesAndStoresAVerdict(t *testing.T) {
 			return what + `{service_name="demo-service"}[180s] @ ` + w.To.Format(time.RFC3339)
 		}
 		if w == c.Before {
-			return WindowStats{Requests: measured(1200, q("requests"), w), Errors: measured(5, q("errors"), w), P95: measured(0.120, q("p95"), w)}, nil
+			return WindowStats{Requests: measured(1200, q("requests"), w), Errors: measured(5, q("errors"), w), P95: measured(0.120, q("p95"), w),
+				ByRoute:         map[string]RouteCounts{"/orders": {Requests: 200}, "/products": {Requests: 1000, Errors: 5}},
+				RequestsByRoute: Query{PromQL: q("requests by route"), Time: w.To, Range: "180s"},
+				ErrorsByRoute:   Query{PromQL: q("errors by route"), Time: w.To, Range: "180s"}}, nil
 		}
-		return WindowStats{Requests: measured(1180, q("requests"), w), Errors: measured(116, q("errors"), w), P95: measured(0.131, q("p95"), w)}, nil
+		return WindowStats{Requests: measured(1180, q("requests"), w), Errors: measured(116, q("errors"), w), P95: measured(0.131, q("p95"), w),
+			ByRoute:         map[string]RouteCounts{"/orders": {Requests: 180, Errors: 111}, "/products": {Requests: 1000, Errors: 5}},
+			RequestsByRoute: Query{PromQL: q("requests by route"), Time: w.To, Range: "180s"},
+			ErrorsByRoute:   Query{PromQL: q("errors by route"), Time: w.To, Range: "180s"}}, nil
 	}}
 
 	if n := newEngine(store, metrics).Tick(context.Background()); n != 1 {
@@ -146,11 +152,16 @@ func TestTickComputesAndStoresAVerdict(t *testing.T) {
 	if r.BeforeRequests != 1200 || r.AfterErrors != 116 || *r.AfterP95 != 0.131 || r.MethodVersion != MethodVersion || r.ComputedAt != now {
 		t.Errorf("result = %+v", r)
 	}
-	for _, key := range []string{"before_requests", "before_errors", "before_p95", "after_requests", "after_errors", "after_p95"} {
+	for _, key := range []string{"before_requests", "before_errors", "before_p95", "after_requests", "after_errors", "after_p95",
+		"before_requests_by_route", "before_errors_by_route", "after_requests_by_route", "after_errors_by_route"} {
 		q, ok := r.Queries[key]
 		if !ok || q.PromQL == "" || q.Range != "180s" {
 			t.Errorf("queries[%s] = %+v", key, q)
 		}
+	}
+	// The route that broke comes first, with both windows' counts.
+	if len(r.Routes) != 2 || r.Routes[0].Route != "/orders" || r.Routes[0].AfterErrors != 111 || r.Routes[0].BeforeRequests != 200 {
+		t.Errorf("routes = %+v, want /orders first", r.Routes)
 	}
 	if !strings.HasPrefix(r.Queries["after_errors"].PromQL, "errors{") || !r.Queries["after_errors"].Time.Equal(c.After.To) {
 		t.Errorf("after_errors query = %+v, want the exact query and the window's end", r.Queries["after_errors"])

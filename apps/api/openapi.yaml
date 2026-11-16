@@ -802,6 +802,20 @@ components:
         errors: { type: number, minimum: 0, description: Responses with a 5xx status. }
         error_rate: { type: number, minimum: 0, maximum: 1, description: "`errors / requests`, or 0 without requests." }
         p95_seconds: { type: [number, "null"], description: "p95 latency of non-5xx responses; null when the window had no latency histogram." }
+    RouteChange:
+      type: object
+      required: [route, before, after]
+      properties:
+        route: { type: string, description: The `http_route` label; empty for requests no route matched. }
+        before: { $ref: "#/components/schemas/RouteCounts" }
+        after: { $ref: "#/components/schemas/RouteCounts" }
+    RouteCounts:
+      type: object
+      required: [requests, errors, error_rate]
+      properties:
+        requests: { type: number, minimum: 0 }
+        errors: { type: number, minimum: 0 }
+        error_rate: { type: number, minimum: 0, maximum: 1 }
     PromQuery:
       type: object
       required: [promql, time, range]
@@ -812,7 +826,7 @@ components:
     ComparisonResult:
       type: object
       required: [verdict, error_rate_verdict, p95_verdict, confidence, reasons, before, after,
-                 queries, method_version, computed_at]
+                 queries, routes, method_version, computed_at]
       properties:
         verdict: { $ref: "#/components/schemas/Verdict" }
         error_rate_verdict: { $ref: "#/components/schemas/Verdict" }
@@ -828,6 +842,14 @@ components:
           type: object
           description: Keyed by what each measured, for example `after_errors`.
           additionalProperties: { $ref: "#/components/schemas/PromQuery" }
+        routes:
+          type: array
+          maxItems: 20
+          description: >-
+            Requests and 5xx responses per `http_route` in both windows, the
+            route whose error rate rose most first: which endpoint changed.
+            Evidence only; the verdict comes from the totals.
+          items: { $ref: "#/components/schemas/RouteChange" }
         method_version: { type: integer, description: The version of the comparison rules that produced this result. }
         computed_at: { type: string, format: date-time }
     WebhookReceipt:

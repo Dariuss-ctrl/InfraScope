@@ -125,6 +125,16 @@ func (a *api) getDeployment(w http.ResponseWriter, r *http.Request) {
 			for key, qv := range res.Queries {
 				rj.Queries[key] = queryJSON{PromQL: qv.PromQL, Time: timestamp(qv.Time), Range: qv.Range}
 			}
+			rj.Routes = make([]routeJSON, 0, len(res.Routes))
+			for _, rt := range res.Routes {
+				rj.Routes = append(rj.Routes, routeJSON{
+					Route: rt.Route,
+					Before: countsJSON{Requests: rt.BeforeRequests, Errors: rt.BeforeErrors,
+						ErrorRate: deployradar.ErrorRate(rt.BeforeErrors, rt.BeforeRequests)},
+					After: countsJSON{Requests: rt.AfterRequests, Errors: rt.AfterErrors,
+						ErrorRate: deployradar.ErrorRate(rt.AfterErrors, rt.AfterRequests)},
+				})
+			}
 			cj.Result = rj
 		}
 		out.Comparison = cj
@@ -235,6 +245,21 @@ type resultJSON struct {
 	Before           measuredJSON         `json:"before"`
 	After            measuredJSON         `json:"after"`
 	Queries          map[string]queryJSON `json:"queries"`
+	Routes           []routeJSON          `json:"routes"`
 	MethodVersion    int                  `json:"method_version"`
 	ComputedAt       string               `json:"computed_at"`
+}
+
+// routeJSON is one http_route's evidence. The error rates are derived from
+// the counts, like the totals'.
+type routeJSON struct {
+	Route  string     `json:"route"`
+	Before countsJSON `json:"before"`
+	After  countsJSON `json:"after"`
+}
+
+type countsJSON struct {
+	Requests  float64 `json:"requests"`
+	Errors    float64 `json:"errors"`
+	ErrorRate float64 `json:"error_rate"`
 }

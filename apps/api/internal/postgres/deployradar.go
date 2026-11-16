@@ -335,19 +335,23 @@ func (db *DB) FinishComparison(ctx context.Context, id int64, o deployradar.Comp
 		if queries == nil {
 			queries = map[string]deployradar.Query{}
 		}
+		routes := r.Routes
+		if routes == nil {
+			routes = []deployradar.RouteStats{}
+		}
 		_, err = db.pool.Exec(ctx, `
 			UPDATE deployment_comparisons
 			SET status = 'done', error = NULL, updated_at = $2,
 			    before_requests = $3, before_errors = $4, after_requests = $5, after_errors = $6,
 			    before_p95_seconds = $7, after_p95_seconds = $8,
 			    error_rate_verdict = $9, p95_verdict = $10, verdict = $11, confidence = $12,
-			    reasons = $13, queries = $14, method_version = $15, computed_at = $16
+			    reasons = $13, queries = $14, method_version = $15, computed_at = $16, routes = $17
 			WHERE id = $1`,
 			id, o.At,
 			r.BeforeRequests, r.BeforeErrors, r.AfterRequests, r.AfterErrors,
 			r.BeforeP95, r.AfterP95,
 			string(r.ErrorRateVerdict), string(r.P95Verdict), string(r.Verdict), r.Confidence,
-			reasons, queries, r.MethodVersion, r.ComputedAt)
+			reasons, queries, r.MethodVersion, r.ComputedAt, routes)
 	}
 	return classify(err)
 }
@@ -383,7 +387,7 @@ const comparisonColumns = `id, deployment_id, status, attempts, claimed_at,
 	before_requests, before_errors, after_requests, after_errors,
 	before_p95_seconds, after_p95_seconds,
 	error_rate_verdict, p95_verdict, verdict, confidence, reasons, queries,
-	method_version, error, computed_at, created_at, updated_at`
+	method_version, error, computed_at, created_at, updated_at, routes`
 
 // qualify prefixes every column in a comma-separated list with an alias.
 func qualify(alias, columns string) string {
@@ -434,6 +438,7 @@ type comparisonRow struct {
 	errorRateVerdict, p95Verdict, verdict, errMessage *string
 	reasons                                           []string
 	queries                                           map[string]deployradar.Query
+	routes                                            []deployradar.RouteStats
 	methodVersion                                     int
 	computedAt                                        *time.Time
 }
@@ -445,7 +450,7 @@ func (r *comparisonRow) dests() []any {
 		&r.beforeRequests, &r.beforeErrors, &r.afterRequests, &r.afterErrors,
 		&r.beforeP95, &r.afterP95,
 		&r.errorRateVerdict, &r.p95Verdict, &r.verdict, &r.confidence, &r.reasons, &r.queries,
-		&r.methodVersion, &r.errMessage, &r.computedAt, &c.CreatedAt, &c.UpdatedAt}
+		&r.methodVersion, &r.errMessage, &r.computedAt, &c.CreatedAt, &c.UpdatedAt, &r.routes}
 }
 
 func (r *comparisonRow) value() deployradar.Comparison {
@@ -463,6 +468,10 @@ func (r *comparisonRow) value() deployradar.Comparison {
 		if queries == nil {
 			queries = map[string]deployradar.Query{}
 		}
+		routes := r.routes
+		if routes == nil {
+			routes = []deployradar.RouteStats{}
+		}
 		c.Result = &deployradar.Result{
 			BeforeRequests:   zeroIfNil(r.beforeRequests),
 			BeforeErrors:     zeroIfNil(r.beforeErrors),
@@ -476,6 +485,7 @@ func (r *comparisonRow) value() deployradar.Comparison {
 			Confidence:       zeroIfNil(r.confidence),
 			Reasons:          reasons,
 			Queries:          queries,
+			Routes:           routes,
 			MethodVersion:    r.methodVersion,
 			ComputedAt:       *r.computedAt,
 		}

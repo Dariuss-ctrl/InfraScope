@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -97,6 +98,71 @@ type WindowStats struct {
 	Requests Measurement // requests in the window
 	Errors   Measurement // responses with a 5xx status
 	P95      Measurement // p95 latency in seconds
+
+	// ByRoute splits the requests and 5xx responses by http_route: the
+	// evidence for which endpoint changed. It does not enter the verdict.
+	ByRoute map[string]RouteCounts
+	// The two queries behind ByRoute.
+	RequestsByRoute Query
+	ErrorsByRoute   Query
+}
+
+// RouteCounts are one route's requests and 5xx responses in one window.
+type RouteCounts struct {
+	Requests float64
+	Errors   float64
+}
+
+// MaxRoutes is how many routes a result keeps, the most changed first.
+const MaxRoutes = 20
+
+// RouteChanges merges two windows' per-route counts, worst first: by how
+// far the route's error rate rose, then by its 5xx responses after the
+// deployment, then by name, so the order is stable. A route seen in only
+// one window counts zero in the other.
+func RouteChanges(before, after map[string]RouteCounts) []RouteStats {
+	names := map[string]bool{}
+	for name := range before {
+		names[name] = true
+	}
+	for name := range after {
+		names[name] = true
+	}
+	out := make([]RouteStats, 0, len(names))
+	for name := range names {
+		b, a := before[name], after[name]
+		if b.Requests == 0 && a.Requests == 0 {
+			continue // no traffic either side: nothing to compare
+		}
+		out = append(out, RouteStats{
+			Route:          name,
+			BeforeRequests: b.Requests, BeforeErrors: b.Errors,
+			AfterRequests: a.Requests, AfterErrors: a.Errors,
+		})
+	}
+	rise := func(r RouteStats) float64 {
+		return ErrorRate(r.AfterErrors, r.AfterRequests) - ErrorRate(r.BeforeErrors, r.BeforeRequests)
+	}
+	slices.SortFunc(out, func(x, y RouteStats) int {
+		switch {
+		case rise(x) != rise(y):
+			return cmpDesc(rise(x), rise(y))
+		case x.AfterErrors != y.AfterErrors:
+			return cmpDesc(x.AfterErrors, y.AfterErrors)
+		}
+		return strings.Compare(x.Route, y.Route)
+	})
+	if len(out) > MaxRoutes {
+		out = out[:MaxRoutes]
+	}
+	return out
+}
+
+func cmpDesc(a, b float64) int {
+	if a > b {
+		return -1
+	}
+	return 1
 }
 
 // Sample returns the values alone, for Judge.

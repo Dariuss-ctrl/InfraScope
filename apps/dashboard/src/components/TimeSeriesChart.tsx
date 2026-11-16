@@ -5,6 +5,8 @@ import {
   type GridComponentOption,
   LegendComponent,
   type LegendComponentOption,
+  MarkLineComponent,
+  type MarkLineComponentOption,
   TooltipComponent,
   type TooltipComponentOption,
 } from 'echarts/components'
@@ -16,16 +18,22 @@ import type { Point } from '../api/services.ts'
 import { toLineData } from '../chartData.ts'
 
 // Only the parts drawn here are bundled.
-register([LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer])
+register([LineChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, SVGRenderer])
 
 type Option = ComposeOption<
   | LineSeriesOption
   | GridComponentOption
   | LegendComponentOption
+  | MarkLineComponentOption
   | TooltipComponentOption
   | XAXisComponentOption
   | YAXisComponentOption
 >
+
+// ChartMarker is a moment worth seeing against the series, such as a
+// deployment: a dashed vertical line with a short label. color names a CSS
+// custom property, like ChartSeries.color.
+export type ChartMarker = { t: Date; label: string; color: string }
 
 // color names a CSS custom property, such as --chart-p95, so charts follow
 // the page's light or dark theme.
@@ -39,11 +47,14 @@ type Props = {
   format: (value: number | null) => string
   // Called with the time under the pointer when the plot area is clicked.
   onSelect?: (t: Date) => void
+  // Drawn as vertical lines; they take no clicks, so a click still selects
+  // the point under it.
+  markers?: readonly ChartMarker[]
 }
 
 // TimeSeriesChart draws step-aligned series on a fixed time axis, so a gap
 // in the data shows as a gap instead of a line drawn across it.
-export function TimeSeriesChart({ label, series, from, to, format, onSelect }: Props) {
+export function TimeSeriesChart({ label, series, from, to, format, onSelect, markers = noMarkers }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const chart = useRef<EChartsType | null>(null)
   const select = useRef(onSelect)
@@ -119,7 +130,7 @@ export function TimeSeriesChart({ label, series, from, to, format, onSelect }: P
         axisLabel: { ...axisText, formatter: (value: number) => format(value) },
         splitLine: { lineStyle: { color: border, type: 'dashed' } },
       },
-      series: series.map((s) => ({
+      series: series.map((s, i) => ({
         name: s.name,
         type: 'line',
         color: s.color ? token(s.color) : undefined,
@@ -128,13 +139,32 @@ export function TimeSeriesChart({ label, series, from, to, format, onSelect }: P
         // A single series gets a faint fill, which reads as volume.
         areaStyle: series.length === 1 ? { opacity: 0.1 } : undefined,
         data: toLineData(s.points),
+        // The markers hang off the first series, once per chart.
+        markLine:
+          i === 0 && markers.length > 0
+            ? {
+                silent: true,
+                symbol: 'none',
+                animation: false,
+                label: { formatter: '{b}', position: 'end', distance: 2, color: muted, fontSize: 10 },
+                data: markers.map((m) => ({
+                  name: m.label,
+                  xAxis: m.t.getTime(),
+                  lineStyle: { color: token(m.color), type: 'dashed', width: 1.25 },
+                })),
+              }
+            : undefined,
       })),
     }
     chart.current?.setOption(option, { notMerge: true })
-  }, [series, from, to, format, dark])
+  }, [series, from, to, format, dark, markers])
 
   return <div ref={container} className="chart" role="img" aria-label={label} />
 }
+
+// A stable empty default, so a chart without markers does not redraw on
+// every render.
+const noMarkers: readonly ChartMarker[] = []
 
 // useDarkScheme follows the system's light or dark setting, which the page's
 // colour tokens follow too.

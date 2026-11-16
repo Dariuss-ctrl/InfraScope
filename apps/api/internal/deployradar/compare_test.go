@@ -1,6 +1,7 @@
 package deployradar
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -338,5 +339,55 @@ func TestFormatting(t *testing.T) {
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
+	}
+}
+
+func TestRouteChangesPutsTheWorstRouteFirst(t *testing.T) {
+	before := map[string]RouteCounts{
+		"/products":      {Requests: 900, Errors: 1},
+		"/orders":        {Requests: 200, Errors: 0},
+		"/orders/{id}":   {Requests: 100, Errors: 0},
+		"/retired-route": {Requests: 50, Errors: 0},
+	}
+	after := map[string]RouteCounts{
+		"/products":    {Requests: 910, Errors: 2},
+		"/orders":      {Requests: 190, Errors: 80}, // 0% → 42%: the broken one
+		"/orders/{id}": {Requests: 105, Errors: 0},
+		"/new-route":   {Requests: 10, Errors: 1}, // 10%, but only in the after window
+		"":             {Requests: 5, Errors: 0},  // requests no route matched
+	}
+	got := RouteChanges(before, after)
+	names := make([]string, len(got))
+	for i, r := range got {
+		names[i] = r.Route
+	}
+	want := []string{"/orders", "/new-route", "/products", "", "/orders/{id}", "/retired-route"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("order = %q, want %q (largest rise in error rate first)", names, want)
+	}
+	if o := got[0]; o.BeforeRequests != 200 || o.BeforeErrors != 0 || o.AfterRequests != 190 || o.AfterErrors != 80 {
+		t.Errorf("/orders = %+v", o)
+	}
+	if n := got[1]; n.BeforeRequests != 0 || n.AfterRequests != 10 {
+		t.Errorf("a route seen only after = %+v, want zero before", n)
+	}
+	if r := got[5]; r.AfterRequests != 0 || r.BeforeRequests != 50 {
+		t.Errorf("a route seen only before = %+v, want zero after", r)
+	}
+}
+
+func TestRouteChangesKeepsTheMostChanged(t *testing.T) {
+	before, after := map[string]RouteCounts{}, map[string]RouteCounts{}
+	for i := range MaxRoutes + 5 {
+		route := fmt.Sprintf("/r%02d", i)
+		before[route] = RouteCounts{Requests: 100}
+		after[route] = RouteCounts{Requests: 100, Errors: float64(i)} // later routes broke more
+	}
+	got := RouteChanges(before, after)
+	if len(got) != MaxRoutes || got[0].Route != fmt.Sprintf("/r%02d", MaxRoutes+4) {
+		t.Errorf("kept %d routes starting with %q, want %d starting with the most changed", len(got), got[0].Route, MaxRoutes)
+	}
+	if len(RouteChanges(nil, nil)) != 0 {
+		t.Error("no routes should give an empty list")
 	}
 }

@@ -11,11 +11,17 @@ vi.mock('../components/TimeSeriesChart.tsx', () => ({
     label: string
     series: { name: string; points: Point[] }[]
     onSelect?: (t: Date) => void
+    markers?: { label: string; color: string }[]
   }) => (
     <div role="img" aria-label={props.label}>
       {props.series.map((s) => (
         <span key={s.name}>
           {s.name}: {s.points.length} points
+        </span>
+      ))}
+      {props.markers?.map((m) => (
+        <span key={m.label}>
+          marker {m.label} in {m.color}
         </span>
       ))}
       <button type="button" onClick={() => props.onSelect?.(new Date(props.series[0].points[1].t))}>
@@ -118,6 +124,64 @@ describe('service overview', () => {
     }
     expect(within(card).getByRole('img', { name: 'Request rate for demo-service' })).toBeTruthy()
     expect(within(card).getByRole('img', { name: 'Error rate for demo-service' })).toBeTruthy()
+  })
+
+  it('marks the charts with the deployments in the range, and links to their verdicts', async () => {
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+    const deployment = (id: number, ref: string, finished: string, verdict: string | null) => ({
+      id,
+      ref,
+      finished_at: finished,
+      created_at: finished,
+      verdict,
+      confidence: verdict ? 0.99 : null,
+      comparison_status: verdict ? 'done' : 'pending',
+      service: 'demo-service',
+    })
+    const live = fakeApi({
+      ...loggedIn,
+      'GET /api/v1/services': { body: { services: [busy] } },
+      'GET /api/v1/services/demo-service/metrics': { body: metrics('demo-service', false) },
+      'GET /api/v1/deployments': {
+        body: {
+          deployments: [
+            deployment(3, 'v3', minutesAgo(5), null),
+            deployment(2, 'v2', minutesAgo(20), 'regression'),
+            deployment(1, 'v1', minutesAgo(180), 'no_change'), // finished before the hour shown
+          ],
+          next_cursor: null,
+        },
+      },
+    })
+    renderApp('/services')
+
+    const card = await screen.findByRole('article', { name: 'demo-service' })
+    const errors = await within(card).findByRole('img', { name: 'Error rate for demo-service' })
+    await within(errors).findByText('marker v2 in --bad')
+    expect(within(errors).getByText('marker v3 in --muted')).toBeTruthy()
+    expect(within(errors).queryByText(/marker v1/)).toBeNull()
+
+    const list = within(card).getByRole('heading', { name: 'Deployments in this range' }).parentElement!
+    expect(within(list).getByRole('link', { name: 'v2' }).getAttribute('href')).toBe('/deployments/2')
+    expect(within(list).getByText('Regression')).toBeTruthy()
+    expect(within(list).getByText('comparing…')).toBeTruthy()
+
+    const query = live.requests.find((r) => r.path.startsWith('/api/v1/deployments?'))
+    expect(new URL(query?.path ?? '', 'http://dashboard.test').searchParams.get('service')).toBe('demo-service')
+  })
+
+  it('draws the charts without markers when deployments cannot be loaded', async () => {
+    fakeApi({
+      ...loggedIn,
+      'GET /api/v1/services': { body: { services: [busy] } },
+      'GET /api/v1/services/demo-service/metrics': { body: metrics('demo-service', false) },
+      'GET /api/v1/deployments': apiError(503, 'database_unavailable'),
+    })
+    renderApp('/services')
+    const card = await screen.findByRole('article', { name: 'demo-service' })
+    const latency = await within(card).findByRole('img', { name: 'Latency for demo-service' })
+    expect(within(latency).queryByText(/^marker/)).toBeNull()
+    expect(within(card).queryByRole('heading', { name: 'Deployments in this range' })).toBeNull()
   })
 
   it('asks the API for the chosen range', async () => {

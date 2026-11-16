@@ -7,13 +7,13 @@ InfraScope's investigation UI: React 19, TypeScript 7 and Vite 8, linted with ox
 | Route | What it shows | Requirement |
 |---|---|---|
 | `/login` | The login form, with the platform status, because a database outage explains a failed login. Afterwards the user returns to the page they asked for. | NFR-3 |
-| `/services` | Each service's request rate, error rate and p50/p95/p99 latency, with charts. A click on a chart opens the traces behind that point. No data is never drawn as zero. | FR-2 |
+| `/services` | Each service's request rate, error rate and p50/p95/p99 latency, with charts. A click on a chart opens the traces behind that point. Deployments in the range are drawn on the charts, coloured by verdict, and listed below them with links. No data is never drawn as zero. | FR-2 |
 | `/traces` | Trace search by service, operation, duration, status and time range, newest or slowest first. | FR-3 |
 | `/traces/:traceId` | The waterfall, nested by parent span, naming the span that spent the most time and the first failure. Span details show the statement, events and attributes, and the logs written during the trace are listed below. `?span=` selects a span. | FR-3, FR-5 |
 | `/logs` | Log search by service, minimum severity, text, trace and span. Each record links to the span that wrote it. | FR-4, FR-5 |
 | `/status` | Every dependency and what breaks while it is down, and any missing ClickHouse table or index with its effect. | NFR-1 |
 | `/deployments` | Deployments reported by GitHub, newest first, with their state and the verdict of their before/after comparison. Pending comparisons refresh themselves. | FR-9 |
-| `/deployments/:deploymentId` | One deployment: the verdict and its reasons, the before/after table, the PromQL behind every number, links to the failing traces and error logs of the after window, and the status history, including statuses that arrived too late to apply. | FR-9 |
+| `/deployments/:deploymentId` | One deployment: the verdict and its reasons, the most affected route, the before/after table and the same counts per route, the PromQL behind every number, links to the failing traces and error logs of the after window, and the status history, including statuses that arrived too late to apply. | FR-9 |
 | `/alerts` | Says that alerting comes in Phase 5. | FR-6 |
 
 Every page except `/login` needs a session. A banner under the header names whatever is down and what still works.

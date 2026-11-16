@@ -30,7 +30,7 @@ histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seco
 
 p95 leaves out 5xx responses. Failures are often fast, an error returned before the real work, so counting them pulls p95 *down* exactly when a release breaks. The first live run showed it: injecting 20% failures moved p95 from 91 ms to 43 ms.
 
-The values are stored with the exact query, evaluation time and range behind each, so anyone can rerun them in Prometheus. The error rate is derived from the two stored counts, so it always reconciles with them. Nothing else from Prometheus is copied.
+The values are stored with the exact query, evaluation time and range behind each, so anyone can rerun them in Prometheus. The error rate is derived from the two stored counts, so it always reconciles with them. The same counts are also taken per `http_route` (`sum by (http_route)`), at most 20 routes, the one whose error rate rose most first, so a verdict can say which endpoint changed. They are evidence only: the verdict comes from the totals. Nothing else from Prometheus is copied.
 
 **Judgement** (`deployradar.Judge`, a pure function):
 

@@ -5,6 +5,7 @@ import {
   type Comparison,
   type ComparisonResult,
   type DeploymentDetail,
+  type RouteChange,
   type Verdict,
   formatConfidence,
   formatCountChange,
@@ -13,9 +14,12 @@ import {
   getDeployment,
   queryLabels,
   reasonVerdict,
+  routeName,
+  routeTone,
   shortSha,
   splitReasons,
   verdictLabels,
+  worstRoute,
 } from '../api/deployments.ts'
 import { StateBadge, VerdictBadge } from '../components/DeploymentBadges.tsx'
 import { ErrorState } from '../components/ErrorState.tsx'
@@ -230,6 +234,7 @@ function VerdictPanel({ comparison: c, service }: { comparison: Comparison | nul
   const after = { from: new Date(c.after.from), to: new Date(c.after.to) }
   const span = { from: new Date(c.before.from), to: new Date(c.after.to) }
   const regression = r.verdict === 'regression'
+  const worst = worstRoute(r)
   return (
     <section className={`verdict verdict--${r.verdict}`} aria-labelledby="verdict-title">
       <div className="verdict__main">
@@ -240,6 +245,13 @@ function VerdictPanel({ comparison: c, service }: { comparison: Comparison | nul
         </h2>
         <p className="verdict__text">{verdictSentences[r.verdict](service)}</p>
         {headline && <p className="verdict__headline">{headline}</p>}
+        {worst && (
+          // Where it broke: the route whose error rate rose most.
+          <p className="verdict__route">
+            Most affected route: <span className="mono">{routeName(worst.route)}</span>, 5xx{' '}
+            {formatRatio(worst.before.error_rate)} → {formatRatio(worst.after.error_rate)}
+          </p>
+        )}
         {rest.length > 0 && (
           <ul className="findings findings--compact" aria-label="Other findings">
             {rest.map((reason) => {
@@ -362,6 +374,7 @@ function Evidence({ comparison: c, result: r }: { comparison: Comparison; result
           </tbody>
         </table>
       </div>
+      {r.routes.length > 0 && <RouteTable routes={r.routes} />}
       <div className="card__body">
         <details className="queries">
           <summary>How these numbers were measured</summary>
@@ -386,5 +399,56 @@ function Evidence({ comparison: c, result: r }: { comparison: Comparison; result
         </details>
       </div>
     </div>
+  )
+}
+
+// RouteTable is the per-route evidence: which endpoint changed. Routes come
+// from the API worst change first; a notable change takes its signal colour.
+function RouteTable({ routes }: { routes: readonly RouteChange[] }) {
+  return (
+    <>
+      <div className="card__subheader">
+        <h3>By route</h3>
+        <span className="card__meta">The route whose error rate rose most comes first.</span>
+      </div>
+      <div className="table-wrap">
+        <table className="results" aria-label="By route">
+          <thead>
+            <tr>
+              <th scope="col">Route</th>
+              <th scope="col" className="results__number narrow-hide">
+                Requests
+              </th>
+              <th scope="col" className="results__number">
+                5xx before
+              </th>
+              <th scope="col" className="results__number">
+                5xx after
+              </th>
+              <th scope="col" className="results__number">
+                Change
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {routes.map((rt) => (
+              <tr key={rt.route}>
+                <th scope="row" className="mono">
+                  {routeName(rt.route)}
+                </th>
+                <td className="results__number narrow-hide">
+                  {wholeNumber.format(rt.before.requests)} → {wholeNumber.format(rt.after.requests)}
+                </td>
+                <td className="results__number">{formatRatio(rt.before.error_rate)}</td>
+                <td className="results__number">{formatRatio(rt.after.error_rate)}</td>
+                <td className={`results__number ${routeTone(rt)}`}>
+                  {formatPointChange(rt.before.error_rate, rt.after.error_rate)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }

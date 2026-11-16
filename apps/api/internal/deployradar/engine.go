@@ -155,7 +155,13 @@ func (e *Engine) Compare(ctx context.Context, c ClaimedComparison) ComparisonOut
 			"after_requests":  after.Requests.Query,
 			"after_errors":    after.Errors.Query,
 			"after_p95":       after.P95.Query,
+
+			"before_requests_by_route": before.RequestsByRoute,
+			"before_errors_by_route":   before.ErrorsByRoute,
+			"after_requests_by_route":  after.RequestsByRoute,
+			"after_errors_by_route":    after.ErrorsByRoute,
 		},
+		Routes:        RouteChanges(before.ByRoute, after.ByRoute),
 		MethodVersion: MethodVersion,
 		ComputedAt:    now,
 	}

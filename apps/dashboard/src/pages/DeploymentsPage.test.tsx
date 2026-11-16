@@ -66,6 +66,18 @@ const regression: DeploymentDetail = {
           range: '180s',
         },
       },
+      routes: [
+        {
+          route: '/orders',
+          before: { requests: 200, errors: 0, error_rate: 0 },
+          after: { requests: 190, errors: 80, error_rate: 0.421 },
+        },
+        {
+          route: '/products',
+          before: { requests: 1599.6, errors: 7.2, error_rate: 0.0045 },
+          after: { requests: 1611.2, errors: 9, error_rate: 0.0056 },
+        },
+      ],
       method_version: 1,
       computed_at: '2026-11-15T10:05:40Z',
     },
@@ -185,6 +197,41 @@ describe('deployment detail', () => {
     expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe(
       '/services?from=2026-11-15T09%3A58%3A00.000Z&to=2026-11-15T10%3A05%3A00.000Z',
     )
+  })
+
+  it('names the route that broke, and breaks the evidence down by route', async () => {
+    fakeApi({ ...loggedIn, 'GET /api/v1/deployments/2': { body: regression } })
+    renderApp('/deployments/2')
+    const verdict = await screen.findByRole('region', { name: /Regression/ })
+    expect(within(verdict).getByText(/^Most affected route:/).textContent).toBe(
+      'Most affected route: /orders, 5xx 0% → 42.1%',
+    )
+
+    const table = screen.getByRole('table', { name: 'By route' })
+    const rows = within(table).getAllByRole('row').slice(1)
+    expect(rows.map((r) => within(r).getByRole('rowheader').textContent)).toEqual(['/orders', '/products'])
+    expect(within(rows[0]).getAllByRole('cell').map((c) => c.textContent)).toEqual([
+      '200 → 190',
+      '0%',
+      '42.1%',
+      '+42.1 pp',
+    ])
+    // Only a notable change is coloured: /orders broke, /products barely moved.
+    expect(within(rows[0]).getByText('+42.1 pp').className).toContain('change--bad')
+    expect(within(rows[1]).getByText('+0.1 pp').className).not.toContain('change--')
+  })
+
+  it('names no route when none stands out', async () => {
+    const calm = structuredClone(regression)
+    calm.comparison!.result!.routes = [
+      { route: '', before: { requests: 5, errors: 0, error_rate: 0 }, after: { requests: 4, errors: 0, error_rate: 0 } },
+    ]
+    fakeApi({ ...loggedIn, 'GET /api/v1/deployments/2': { body: calm } })
+    renderApp('/deployments/2')
+    await screen.findByRole('region', { name: /Regression/ })
+    expect(screen.queryByText(/^Most affected route:/)).toBeNull()
+    // A request no route matched is named in words.
+    expect(within(screen.getByRole('table', { name: 'By route' })).getByText('(no route)')).toBeTruthy()
   })
 
   it('keeps the trace link secondary when nothing regressed', async () => {

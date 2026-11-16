@@ -29,6 +29,9 @@ func (c *Client) WindowStats(ctx context.Context, service, environment string, w
 			addMatcher(selector, `http_response_status_code=~"5.."`), rng),
 		"p95": fmt.Sprintf("histogram_quantile(0.95, sum by (le) (increase(%s_bucket%s[%s])))", durationMetric,
 			addMatcher(selector, `http_response_status_code!~"5.."`), rng),
+		"requests_by_route": fmt.Sprintf("sum by (http_route) (increase(%s_count%s[%s]))", durationMetric, selector, rng),
+		"errors_by_route": fmt.Sprintf("sum by (http_route) (increase(%s_count%s[%s]))", durationMetric,
+			addMatcher(selector, `http_response_status_code=~"5.."`), rng),
 	}
 	results, err := all(queries, func(q string) ([]series, error) { return c.instant(ctx, q, w.To) })
 	if err != nil {
@@ -42,7 +45,28 @@ func (c *Client) WindowStats(ctx context.Context, service, environment string, w
 		}
 		return m
 	}
-	stats := deployradar.WindowStats{Requests: measure("requests"), Errors: measure("errors"), P95: measure("p95")}
+	query := func(key string) deployradar.Query {
+		return deployradar.Query{PromQL: queries[key], Time: w.To.UTC(), Range: rng}
+	}
+	stats := deployradar.WindowStats{
+		Requests: measure("requests"), Errors: measure("errors"), P95: measure("p95"),
+		ByRoute:         map[string]deployradar.RouteCounts{},
+		RequestsByRoute: query("requests_by_route"), ErrorsByRoute: query("errors_by_route"),
+	}
+	// Routes with requests but no 5xx have no error series: zero, as above.
+	for _, s := range results["requests_by_route"] {
+		if v := value(s); v != nil {
+			stats.ByRoute[s.Labels["http_route"]] = deployradar.RouteCounts{Requests: *v}
+		}
+	}
+	for _, s := range results["errors_by_route"] {
+		if v := value(s); v != nil {
+			route := s.Labels["http_route"]
+			counts := stats.ByRoute[route]
+			counts.Errors = *v
+			stats.ByRoute[route] = counts
+		}
+	}
 	// A service that never answered 5xx has no such series at all. With
 	// traffic in the window that means zero errors, not unknown.
 	if stats.Errors.Value == nil && stats.Requests.Value != nil {

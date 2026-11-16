@@ -141,8 +141,17 @@ func TestEngineDetectsARegressionEndToEnd(t *testing.T) {
 	if q.PromQL != want || !q.Time.Equal(c.After.To) || q.Range != "180s" {
 		t.Errorf("after_errors query = %+v\nwant %s at %v", q, want, c.After.To)
 	}
-	if len(r.Queries) != 6 || r.MethodVersion != deployradar.MethodVersion {
+	if len(r.Queries) != 10 || r.MethodVersion != deployradar.MethodVersion {
 		t.Errorf("queries %d, method %d", len(r.Queries), r.MethodVersion)
+	}
+	// Per route: the service has one, and its counts match the totals.
+	if len(r.Routes) != 1 || r.Routes[0].Route != "/orders" {
+		t.Fatalf("routes = %+v, want /orders", r.Routes)
+	}
+	approx(t, "/orders before requests", r.Routes[0].BeforeRequests, 1800, 0.1)
+	approx(t, "/orders after errors", r.Routes[0].AfterErrors, 180, 0.1)
+	if !strings.Contains(r.Queries["after_errors_by_route"].PromQL, "sum by (http_route)") {
+		t.Errorf("after_errors_by_route = %+v", r.Queries["after_errors_by_route"])
 	}
 
 	sleepy, err := db.Deployment(ctx, sleepyID)

@@ -135,6 +135,9 @@ func TestGetDeployment(t *testing.T) {
 				Queries: map[string]deployradar.Query{
 					"after_errors": {PromQL: `sum(increase(x[180s]))`, Time: after.To, Range: "180s"},
 				},
+				Routes: []deployradar.RouteStats{
+					{Route: "/orders", BeforeRequests: 200, BeforeErrors: 0, AfterRequests: 190, AfterErrors: 76},
+				},
 				MethodVersion: 1, ComputedAt: after.To.Add(time.Minute),
 			},
 		},
@@ -161,6 +164,9 @@ func TestGetDeployment(t *testing.T) {
 	}
 	if q := r.Queries["after_errors"]; q.PromQL != `sum(increase(x[180s]))` || q.Time != "2026-10-30T11:06:00Z" || q.Range != "180s" {
 		t.Errorf("query = %+v", q)
+	}
+	if len(r.Routes) != 1 || r.Routes[0].Route != "/orders" || r.Routes[0].After.ErrorRate != 0.4 || r.Routes[0].Before.ErrorRate != 0 {
+		t.Errorf("routes = %+v, want /orders with its error rates derived", r.Routes)
 	}
 
 	// A deployment that never succeeded has no comparison: null, not missing.

@@ -66,4 +66,6 @@ export const loggedIn: Record<string, Handler> = {
   'GET /api/v1/auth/me': { body: admin },
   'GET /api/v1/status': { body: healthy },
   'GET /api/v1/services': { body: { services: [] } },
+  // The overview asks each service for its deployments, to mark its charts.
+  'GET /api/v1/deployments': { body: { deployments: [], next_cursor: null } },
 }

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { type ComponentProps, Suspense, lazy, useId } from 'react'
+import { type ComponentProps, Suspense, lazy, useId, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { type DeploymentSummary, deploymentsFinishedIn } from '../api/deployments.ts'
 import {
   type Point,
   type ServiceMetrics,
@@ -9,11 +10,13 @@ import {
   serviceMetrics,
 } from '../api/services.ts'
 import { hasValues } from '../chartData.ts'
+import { HealthBadge } from '../components/DeploymentBadges.tsx'
 import { ErrorState } from '../components/ErrorState.tsx'
 import { AlertIcon, ClockIcon } from '../components/Icons.tsx'
 import { TimeRangePicker } from '../components/TimeRangePicker.tsx'
-import { formatRate, formatRatio, formatSeconds } from '../format.ts'
-import { type TraceFilters, tracesPath } from '../links.ts'
+import type { ChartMarker } from '../components/TimeSeriesChart.tsx'
+import { formatDateTime, formatRate, formatRatio, formatSeconds } from '../format.ts'
+import { type TraceFilters, deploymentPath, tracesPath } from '../links.ts'
 import {
   type TimeRange,
   nearestPoint,
@@ -82,6 +85,17 @@ function ServiceCard({ summary, range }: { summary: ServiceSummary; range: TimeR
     },
     refetchInterval: refreshInterval(range),
   })
+  // Deployments in the range become markers on the charts (FR-9). They are
+  // extra context: when they cannot be loaded the charts simply have none.
+  const deployments = useQuery({
+    queryKey: ['service-deployments', service, rangeKey(range)],
+    queryFn: ({ signal }) => {
+      const { from, to } = resolveRange(range)
+      return deploymentsFinishedIn(service, from, to, signal)
+    },
+    refetchInterval: refreshInterval(range),
+  })
+  const markers = useMemo(() => (deployments.data ?? []).map(toMarker), [deployments.data])
 
   // Opens the traces behind one chart point: this service, the window the
   // point summarises, and whatever the chart is about (AC-2.3).
@@ -120,18 +134,60 @@ function ServiceCard({ summary, range }: { summary: ServiceSummary; range: TimeR
         {metrics.isError && <ErrorState error={metrics.error} />}
         {metrics.data && (
           <Suspense fallback={<p className="loading">Loading charts…</p>}>
-            <ServiceCharts service={service} data={metrics.data} onSelect={openTraces} />
+            <ServiceCharts service={service} data={metrics.data} onSelect={openTraces} markers={markers} />
           </Suspense>
         )}
+        {deployments.data && deployments.data.length > 0 && <DeploymentMarkers deployments={deployments.data} />}
       </div>
     </article>
+  )
+}
+
+// A deployment's marker takes its verdict's colour: red only for a
+// regression, green for an improvement, quiet otherwise.
+const markerColors: Record<string, string> = { regression: '--bad', improvement: '--ok' }
+
+function toMarker(d: DeploymentSummary): ChartMarker {
+  return {
+    t: new Date(d.finished_at ?? d.created_at),
+    label: d.ref,
+    color: (d.verdict && markerColors[d.verdict]) || '--muted',
+  }
+}
+
+// DeploymentMarkers names the lines drawn on the charts, with a link to each
+// deployment's verdict and evidence.
+function DeploymentMarkers({ deployments }: { deployments: readonly DeploymentSummary[] }) {
+  return (
+    <div className="deploy-markers">
+      <h3 className="eyebrow">Deployments in this range</h3>
+      <ul>
+        {deployments.map((d) => (
+          <li key={d.id}>
+            <Link to={deploymentPath(d.id)}>{d.ref}</Link>
+            <HealthBadge status={d.comparison_status} verdict={d.verdict} confidence={d.confidence} />
+            <span className="muted">{d.finished_at ? formatDateTime(d.finished_at) : ''}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
 type ChartData = ServiceMetrics & { from: Date; to: Date }
 type SelectPoint = (points: readonly Point[], t: Date, filters: TraceFilters) => void
 
-function ServiceCharts({ service, data, onSelect }: { service: string; data: ChartData; onSelect: SelectPoint }) {
+function ServiceCharts({
+  service,
+  data,
+  onSelect,
+  markers,
+}: {
+  service: string
+  data: ChartData
+  onSelect: SelectPoint
+  markers: readonly ChartMarker[]
+}) {
   const { series, from, to } = data
   return (
     <div className="service-card__charts">
@@ -142,6 +198,7 @@ function ServiceCharts({ service, data, onSelect }: { service: string; data: Cha
         from={from}
         to={to}
         format={formatRate}
+        markers={markers}
         onSelect={(t) => onSelect(series.request_rate, t, {})}
       />
       <ChartFigure
@@ -151,6 +208,7 @@ function ServiceCharts({ service, data, onSelect }: { service: string; data: Cha
         from={from}
         to={to}
         format={formatRatio}
+        markers={markers}
         onSelect={(t) => onSelect(series.error_rate, t, { status: 'error' })}
       />
       <ChartFigure
@@ -164,6 +222,7 @@ function ServiceCharts({ service, data, onSelect }: { service: string; data: Cha
         from={from}
         to={to}
         format={formatSeconds}
+        markers={markers}
         onSelect={(t) => onSelect(series.latency_p95_seconds, t, { sort: 'duration' })}
       />
     </div>

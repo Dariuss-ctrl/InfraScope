@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -484,6 +485,10 @@ func TestComparisonClaimLifecycle(t *testing.T) {
 		Queries: map[string]deployradar.Query{
 			"before_requests": {PromQL: `sum(increase(http_server_request_duration_seconds_count{service_name="demo-service"}[3m]))`, Time: at(now, -13*time.Minute), Range: "3m"},
 		},
+		Routes: []deployradar.RouteStats{
+			{Route: "/orders", BeforeRequests: 200, AfterRequests: 190, AfterErrors: 80},
+			{Route: "", BeforeRequests: 5, AfterRequests: 4},
+		},
 		MethodVersion: 1, ComputedAt: now,
 	}
 	if err := f.db.FinishComparison(f.ctx, third[0].ID, deployradar.ComparisonOutcome{Status: deployradar.ComparisonDone, Result: result, At: now}); err != nil {
@@ -496,6 +501,9 @@ func TestComparisonClaimLifecycle(t *testing.T) {
 	r := c.Result
 	if r.Verdict != deployradar.VerdictRegression || r.AfterErrors != 116 || *r.AfterP95 != p95After || r.Confidence != 0.999 || !r.ComputedAt.Equal(now) {
 		t.Errorf("result = %+v", r)
+	}
+	if !slices.Equal(r.Routes, result.Routes) {
+		t.Errorf("routes = %+v, want them back in order: %+v", r.Routes, result.Routes)
 	}
 	if len(r.Reasons) != 1 || r.Reasons[0] != result.Reasons[0] {
 		t.Errorf("reasons = %v", r.Reasons)

@@ -51,6 +51,22 @@ func TestWindowStats(t *testing.T) {
 	}
 	approx(t, "catalog p95", catalog.P95.Value, 0.0235, 0.001)
 
+	// Per route: checkout serves only /orders, so its counts are the totals;
+	// catalog's one route has requests and no 5xx series, which is zero.
+	if len(checkout.ByRoute) != 1 {
+		t.Fatalf("checkout routes = %+v, want /orders only", checkout.ByRoute)
+	}
+	orders := checkout.ByRoute["/orders"]
+	approx(t, "/orders requests", &orders.Requests, 1800, 30)
+	approx(t, "/orders errors", &orders.Errors, 90, 3)
+	if p := catalog.ByRoute["/products"]; p.Requests < 700 || p.Errors != 0 {
+		t.Errorf("/products = %+v, want about 720 requests and no errors", p)
+	}
+	wantByRoute := `sum by (http_route) (increase(http_server_request_duration_seconds_count{service_name="checkout",deployment_environment_name="local",http_response_status_code=~"5.."}[180s]))`
+	if q := checkout.ErrorsByRoute; q.PromQL != wantByRoute || !q.Time.Equal(dataEnd) || q.Range != "180s" {
+		t.Errorf("errors by route query = %+v\nwant %s", q, wantByRoute)
+	}
+
 	// An unknown service, or the wrong environment, has no series at all.
 	for _, tc := range [][2]string{{"nobody", "local"}, {"checkout", "staging"}} {
 		stats, err := client.WindowStats(ctx, tc[0], tc[1], w)

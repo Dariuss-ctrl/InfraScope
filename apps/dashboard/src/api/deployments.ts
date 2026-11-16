@@ -51,6 +51,11 @@ export type WindowMeasurement = {
 
 export type PromQuery = { promql: string; time: string; range: string }
 
+export type RouteCounts = { requests: number; errors: number; error_rate: number }
+
+// RouteChange is one http_route's evidence; routes come worst change first.
+export type RouteChange = { route: string; before: RouteCounts; after: RouteCounts }
+
 export type ComparisonResult = {
   verdict: Verdict
   error_rate_verdict: Verdict
@@ -60,6 +65,7 @@ export type ComparisonResult = {
   before: WindowMeasurement
   after: WindowMeasurement
   queries: Record<string, PromQuery>
+  routes: RouteChange[]
   method_version: number
   computed_at: string
 }
@@ -96,6 +102,31 @@ export function listDeployments(
   return apiGet<DeploymentList>('/api/v1/deployments', { params: { ...filters, cursor }, signal })
 }
 
+// deploymentsFinishedIn lists a service's deployments that finished between
+// from and to, newest first: the markers on its charts. The API filters on
+// when a deployment was created, so the query starts an hour earlier and the
+// finish time decides.
+export async function deploymentsFinishedIn(
+  service: string,
+  from: Date,
+  to: Date,
+  signal?: AbortSignal,
+): Promise<DeploymentSummary[]> {
+  const page = await apiGet<DeploymentList>('/api/v1/deployments', {
+    params: {
+      service,
+      from: new Date(from.getTime() - 60 * 60 * 1000).toISOString(),
+      to: to.toISOString(),
+      limit: 50,
+    },
+    signal,
+  })
+  return page.deployments.filter((d) => {
+    const finished = d.finished_at === null ? Number.NaN : Date.parse(d.finished_at)
+    return finished >= from.getTime() && finished <= to.getTime()
+  })
+}
+
 export function getDeployment(id: string, signal?: AbortSignal): Promise<DeploymentDetail> {
   return apiGet<DeploymentDetail>(`/api/v1/deployments/${encodeURIComponent(id)}`, { signal })
 }
@@ -116,7 +147,37 @@ export const queryLabels: [key: string, label: string][] = [
   ['after_errors', '5xx responses, after'],
   ['before_p95', 'p95 latency of non-5xx responses, before'],
   ['after_p95', 'p95 latency of non-5xx responses, after'],
+  ['before_requests_by_route', 'Requests by route, before'],
+  ['after_requests_by_route', 'Requests by route, after'],
+  ['before_errors_by_route', '5xx responses by route, before'],
+  ['after_errors_by_route', '5xx responses by route, after'],
 ]
+
+// The smallest rise in a route's error rate worth pointing at: one
+// percentage point, the same floor the verdict uses for the whole service.
+const notableRise = 0.01
+
+// worstRoute is the route whose error rate rose most, when it rose enough to
+// name; null when no route stands out.
+export function worstRoute(result: ComparisonResult): RouteChange | null {
+  const first = result.routes[0]
+  return first && first.after.error_rate - first.before.error_rate >= notableRise ? first : null
+}
+
+// routeName shows an empty http_route (a request no route matched) in words.
+export function routeName(route: string): string {
+  return route === '' ? '(no route)' : route
+}
+
+// routeTone colours a route's error-rate change when it moved by at least
+// the notable amount either way.
+export function routeTone(r: RouteChange): '' | 'change--bad' | 'change--ok' {
+  const rise = r.after.error_rate - r.before.error_rate
+  if (rise >= notableRise) {
+    return 'change--bad'
+  }
+  return rise <= -notableRise ? 'change--ok' : ''
+}
 
 export function shortSha(sha: string): string {
   return sha.slice(0, 7)
