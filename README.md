@@ -6,6 +6,10 @@ InfraScope collects traces, metrics and logs with OpenTelemetry, stores them in 
 
 > **Status: Phase 4 — DeployRadar.** Every deployment GitHub reports is compared with the service's health before it: error rate and p95 latency in each window, a verdict, and the exact PromQL behind every number, one click from the failing traces. Phases 1–3 built the investigation that follows: from a slow request on the service overview to the span and statement that caused it, and the logs written during it, with every page saying when part of the platform is down. [Browser journeys](tests/e2e/README.md) walk that investigation against the running stack in CI, beside the [pipeline test](tests/pipeline/README.md) and [integration tests](tests/integration/README.md) against real databases. Alerting comes in Phase 5 ([roadmap](docs/SPEC.md#12-roadmap)). No performance numbers are claimed until they are [measured](docs/benchmarks/README.md).
 
+![DeployRadar marks a bad release as a regression, shows which routes broke, and opens the failing requests](docs/images/deployradar.gif)
+
+*A release ships with one storage call in five failing. DeployRadar marks it a regression, shows which routes broke, and opens the failing requests behind it. Recorded in the [demo run](docs/results/2026-11-16-demo-run.md).*
+
 ## The problem
 
 Dashboards tell you *that* p95 latency doubled. Finding out *why* usually means jumping between a metrics tool, a tracing tool and a log search, and lining up timestamps by hand. InfraScope's job is to make that path short and exact.
@@ -21,6 +25,20 @@ Dashboards tell you *that* p95 latency doubled. Finding out *why* usually means 
 7. Compare the before and after measurements in a benchmark report.
 
 Full script with commands: [docs/demo-script.md](docs/demo-script.md).
+
+In the [recorded run](docs/results/2026-11-16-demo-run.md), p95 went from 9.4 ms to 167 ms while traffic stayed at 20 requests per second, and came back to 11 ms after the fix. The slowest request spent 2.83 s of its 4.71 s in one `SELECT`, which the waterfall names, next to the slow-query warning logged during it:
+
+![The trace of the slowest request: most of its time in one SELECT, with the statement and the slow-query warning](docs/images/trace-waterfall.png)
+
+## Did that deployment do it?
+
+The same incident often starts with a release. **DeployRadar** receives GitHub's deployment webhooks and compares each successful deployment's error rate and p95 latency before and after it, in Prometheus. It gives a verdict with a confidence, names the route that changed most, and keeps the exact PromQL behind every number, so any of them can be checked ([ADR-0007](docs/decisions/0007-deployment-health-comparison.md)).
+
+In the recorded run, a release that failed one storage call in five was marked **Regression**: error rate 0.0% → 19.5% (+19.5 pp, p<0.001) over 3,600 requests in each window. The healthy release before it read **No change**, and the fix after it **Improvement**. The overview marks each deployment on the charts:
+
+![The service overview with the S1 latency spike, then the v2 error spike, and each deployment marked on the charts](docs/images/overview-deployments.png)
+
+Try it with `make demo-deploy V=v2 ERROR_RATE=0.2` ([tutorial, part 4](docs/tutorial.md#part-4-catch-a-bad-deployment)).
 
 ## Architecture
 
@@ -98,7 +116,10 @@ curl -b session.txt 'http://localhost:8080/api/v1/traces?service=demo-service&so
 
 ## Results
 
-*Filled in at Phase 6 from measured runs.* Every number here will link to a report produced by the [benchmark method](docs/benchmarks/README.md).
+Every number in this README links to a report.
+
+- [Demo run, 2026-11-16](docs/results/2026-11-16-demo-run.md): one recorded run of the missing-index investigation and DeployRadar on a laptop, with the setup, the sequence and the raw figures. It shows the investigations working on real telemetry; it is not a benchmark.
+- Benchmark reports (S1 before and after, repeated, on documented hardware) come with Phase 6, following the [benchmark method](docs/benchmarks/README.md).
 
 ## Limitations (by design)
 

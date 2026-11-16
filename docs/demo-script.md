@@ -102,7 +102,7 @@ The script reports the deployment in progress, recreates `demo-service` as `v1`,
 make demo-deploy V=v2 ERROR_RATE=0.2
 ```
 
-**Show:** five minutes later, the v2 row says **Regression**. Its page leads with the reason in one line, with the before/after table and the confidence below it. In a run on a development laptop it read *error rate 0.0% → 19.8% (+19.8 pp, p<0.001)*; the exact figures vary from run to run, since one request in five fails at random.
+**Show:** five minutes later, the v2 row says **Regression**. Its page leads with the reason in one line, with the before/after table and the confidence below it. In the [recorded demo run](results/2026-11-16-demo-run.md) it read *error rate 0.0% → 19.5% (+19.5 pp, p<0.001)*; the exact figures vary from run to run, since one request in five fails at random.
 
 **Point out:** every number can be checked. *PromQL behind these numbers* holds the exact query, evaluation time and range for each value, ready to paste into Prometheus. Nothing was copied out of Prometheus except the results.
 
