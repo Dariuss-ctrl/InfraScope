@@ -127,6 +127,7 @@ On its first start, demo-service creates and seeds the `shop` database (1M order
 ### Logging in fails
 
 - **`401 Invalid username or password`:** the account is `INFRASCOPE_ADMIN_USER` / `INFRASCOPE_ADMIN_PASSWORD` from `.env`, created when the API starts. To reset the password, change it in `.env` and run `$COMPOSE up -d api`. On startup the API replaces the hash and revokes every existing session (`admin account ready … outcome=password_changed` in `make logs S=api`).
+- **Renamed the admin?** Changing `INFRASCOPE_ADMIN_USER` creates the new account at the next start and removes every other account with its sessions, so a previous name, and a placeholder password with it, stop working. The API logs `removed accounts other than the configured admin` with the names.
 - **`429 Too many login attempts`:** each client gets 5 attempts, then one more every 12 seconds. Wait for the `Retry-After` header's number of seconds.
 - **`403 forbidden`:** a state-changing request carried an `Origin` from another site or port. Use the dashboard's own address, or a non-browser client, which sends no `Origin`.
 

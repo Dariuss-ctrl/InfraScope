@@ -39,6 +39,26 @@ func (m *memStore) UserByName(_ context.Context, username string) (User, error) 
 	return u, nil
 }
 
+func (m *memStore) DeleteUsersExcept(_ context.Context, username string) ([]string, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var removed []string
+	for name, u := range m.users {
+		if name == username {
+			continue
+		}
+		removed = append(removed, name)
+		delete(m.users, name)
+		for token, s := range m.sessions {
+			if s.userID == u.ID {
+				delete(m.sessions, token)
+			}
+		}
+	}
+	return removed, nil
+}
+
 func (m *memStore) CreateUser(_ context.Context, username, hash string) error {
 	m.users[username] = User{ID: int64(len(m.users) + 1), Username: username, PasswordHash: hash}
 	return m.err
@@ -108,19 +128,19 @@ func TestBootstrap(t *testing.T) {
 	store := newMemStore()
 	svc := newService(t, store)
 
-	if got, err := svc.Bootstrap(ctx, "admin", "first-password"); err != nil || got != AdminCreated {
-		t.Fatalf("first Bootstrap = %q, %v; want %q", got, err, AdminCreated)
+	if got, err := svc.Bootstrap(ctx, "admin", "first-password"); err != nil || got.Outcome != AdminCreated || len(got.Removed) != 0 {
+		t.Fatalf("first Bootstrap = %+v, %v; want %q", got, err, AdminCreated)
 	}
-	if got, err := svc.Bootstrap(ctx, "admin", "first-password"); err != nil || got != AdminUnchanged {
-		t.Fatalf("repeat Bootstrap = %q, %v; want %q", got, err, AdminUnchanged)
+	if got, err := svc.Bootstrap(ctx, "admin", "first-password"); err != nil || got.Outcome != AdminUnchanged {
+		t.Fatalf("repeat Bootstrap = %+v, %v; want %q", got, err, AdminUnchanged)
 	}
 
 	token, _, err := svc.Login(ctx, "admin", "first-password")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if got, err := svc.Bootstrap(ctx, "admin", "second-password"); err != nil || got != AdminPasswordChanged {
-		t.Fatalf("Bootstrap with a new password = %q, %v; want %q", got, err, AdminPasswordChanged)
+	if got, err := svc.Bootstrap(ctx, "admin", "second-password"); err != nil || got.Outcome != AdminPasswordChanged {
+		t.Fatalf("Bootstrap with a new password = %+v, %v; want %q", got, err, AdminPasswordChanged)
 	}
 	if _, err := svc.Authenticate(ctx, token); !errors.Is(err, ErrInvalidSession) {
 		t.Errorf("session survived a password change: err = %v", err)
@@ -130,6 +150,42 @@ func TestBootstrap(t *testing.T) {
 	}
 	if _, _, err := svc.Login(ctx, "admin", "second-password"); err != nil {
 		t.Errorf("new password rejected: %v", err)
+	}
+}
+
+// Renaming the admin (a new INFRASCOPE_ADMIN_USER) must not leave the old
+// account able to log in, least of all with a placeholder password.
+func TestBootstrapLeavesOnlyTheConfiguredAdmin(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	svc := newService(t, store)
+	if _, err := svc.Bootstrap(ctx, "admin", "change-me-admin"); err != nil {
+		t.Fatal(err)
+	}
+	oldToken, _, err := svc.Login(ctx, "admin", "change-me-admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.Bootstrap(ctx, "operator", "a-real-password")
+	if err != nil || got.Outcome != AdminCreated || len(got.Removed) != 1 || got.Removed[0] != "admin" {
+		t.Fatalf("Bootstrap after renaming = %+v, %v; want operator created and admin removed", got, err)
+	}
+	if _, _, err := svc.Login(ctx, "admin", "change-me-admin"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("the old account still logs in: err = %v", err)
+	}
+	if _, err := svc.Authenticate(ctx, oldToken); !errors.Is(err, ErrInvalidSession) {
+		t.Errorf("the old account's session survived: err = %v", err)
+	}
+	if _, _, err := svc.Login(ctx, "operator", "a-real-password"); err != nil {
+		t.Errorf("the configured admin cannot log in: %v", err)
+	}
+
+	// Removal failing (the database is down) fails the bootstrap: the API
+	// must not start with a stale account in place.
+	store.err = errors.New("database down")
+	if _, err := svc.Bootstrap(ctx, "operator", "a-real-password"); err == nil {
+		t.Error("Bootstrap succeeded although the store failed")
 	}
 }
 

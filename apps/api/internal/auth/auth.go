@@ -39,6 +39,9 @@ type Store interface {
 	// ReplacePassword updates the hash and deletes the user's sessions in
 	// one transaction.
 	ReplacePassword(ctx context.Context, userID int64, passwordHash string) error
+	// DeleteUsersExcept deletes every user but username, with their
+	// sessions, and returns the names it deleted.
+	DeleteUsersExcept(ctx context.Context, username string) ([]string, error)
 	CreateSession(ctx context.Context, tokenHash []byte, userID int64, expiresAt time.Time) error
 	// Session returns the session for tokenHash if it is unexpired at now.
 	Session(ctx context.Context, tokenHash []byte, now time.Time) (Session, error)
@@ -89,11 +92,33 @@ func NewService(store Store, ttl time.Duration, cost int) (*Service, error) {
 	return &Service{store: store, ttl: ttl, cost: cost, now: time.Now, dummyHash: dummy}, nil
 }
 
-// Bootstrap makes the configured admin account match the environment: it
-// creates the account on first start and, when the configured password has
-// changed, replaces the hash and revokes every existing session. It returns
-// one of AdminCreated, AdminPasswordChanged or AdminUnchanged.
-func (s *Service) Bootstrap(ctx context.Context, username, password string) (string, error) {
+// BootstrapResult says what Bootstrap did.
+type BootstrapResult struct {
+	// Outcome is AdminCreated, AdminPasswordChanged or AdminUnchanged.
+	Outcome string
+	// Removed names the accounts deleted because they were not the
+	// configured admin, for example after INFRASCOPE_ADMIN_USER changed.
+	Removed []string
+}
+
+// Bootstrap makes the accounts match the environment (ADR-0006): the
+// configured admin is the only account. It creates the admin on first start
+// and, when the configured password has changed, replaces the hash and
+// revokes every session. It then deletes any other account with its
+// sessions, so renaming the admin cannot leave the previous login working.
+func (s *Service) Bootstrap(ctx context.Context, username, password string) (BootstrapResult, error) {
+	outcome, err := s.bootstrapAdmin(ctx, username, password)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+	removed, err := s.store.DeleteUsersExcept(ctx, username)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+	return BootstrapResult{Outcome: outcome, Removed: removed}, nil
+}
+
+func (s *Service) bootstrapAdmin(ctx context.Context, username, password string) (string, error) {
 	user, err := s.store.UserByName(ctx, username)
 	switch {
 	case errors.Is(err, backend.ErrNotFound):

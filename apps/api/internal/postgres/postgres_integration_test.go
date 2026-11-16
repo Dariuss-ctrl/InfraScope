@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -152,6 +153,28 @@ func TestAuthServiceAgainstPostgres(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	if _, err := svc.Authenticate(ctx, token); !errors.Is(err, auth.ErrInvalidSession) {
 		t.Errorf("expired session: err = %v, want ErrInvalidSession", err)
+	}
+
+	// Renaming the admin removes the previous account and, through the
+	// foreign key, its sessions.
+	long, err := auth.NewService(db, time.Hour, bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldToken, _, err := long.Login(ctx, "service-admin", "correct-horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := long.Bootstrap(ctx, "renamed-admin", "battery-staple")
+	if err != nil || got.Outcome != auth.AdminCreated || !slices.Equal(got.Removed, []string{"service-admin"}) {
+		t.Fatalf("Bootstrap after renaming = %+v, %v; want service-admin removed", got, err)
+	}
+	if _, err := long.Authenticate(ctx, oldToken); !errors.Is(err, auth.ErrInvalidSession) {
+		t.Errorf("the removed account's session survived: err = %v", err)
+	}
+	var users int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&users); err != nil || users != 1 {
+		t.Errorf("users = %d, %v; want only the configured admin", users, err)
 	}
 }
 

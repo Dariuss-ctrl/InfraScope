@@ -95,11 +95,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	outcome, err := authService.Bootstrap(ctx, cfg.AdminUser, cfg.AdminPassword)
+	boot, err := authService.Bootstrap(ctx, cfg.AdminUser, cfg.AdminPassword)
 	if err != nil {
 		return fmt.Errorf("admin account: %w", err)
 	}
-	logger.Info("admin account ready", "user", cfg.AdminUser, "outcome", outcome)
+	logger.Info("admin account ready", "user", cfg.AdminUser, "outcome", boot.Outcome)
+	if len(boot.Removed) > 0 {
+		// The admin was renamed: the previous account and its sessions are gone.
+		logger.Warn("removed accounts other than the configured admin", "removed", boot.Removed)
+	}
 
 	traced := func(rt http.RoundTripper) http.RoundTripper { return otelhttp.NewTransport(rt) }
 	telemetryStore := clickhouse.New(clickhouse.Config{

@@ -105,6 +105,17 @@ func (db *DB) ReplacePassword(ctx context.Context, userID int64, passwordHash st
 	}))
 }
 
+// DeleteUsersExcept implements auth.Store. Sessions go with their user
+// (ON DELETE CASCADE).
+func (db *DB) DeleteUsersExcept(ctx context.Context, username string) ([]string, error) {
+	rows, err := db.pool.Query(ctx, `DELETE FROM users WHERE username <> $1 RETURNING username`, username)
+	if err != nil {
+		return nil, classify(err)
+	}
+	removed, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	return removed, classify(err)
+}
+
 // CreateSession implements auth.Store.
 func (db *DB) CreateSession(ctx context.Context, tokenHash []byte, userID int64, expiresAt time.Time) error {
 	_, err := db.pool.Exec(ctx,
