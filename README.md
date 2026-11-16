@@ -44,6 +44,8 @@ Details: [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
+New here? The **[tutorial](docs/tutorial.md)** takes you from a fresh clone to finding a slow query and catching a bad deployment, step by step, in about an hour.
+
 Requirements: Docker with Compose v2. `make` is optional.
 
 ```bash
@@ -119,6 +121,7 @@ docs/             spec, architecture, ADRs, runbook, benchmarks
 
 ## Documentation
 
+- [Tutorial](docs/tutorial.md): your first hour, from clone to two investigations
 - [Specification](docs/SPEC.md): requirements, data model, API, security, testing, roadmap
 - [Architecture](docs/architecture.md): components, flows, topology, failure modes
 - [Decision records](docs/decisions/README.md)
